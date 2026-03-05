@@ -86,6 +86,25 @@ class MessageBuffer:
     def flush(self, user: User) -> Messages:
         return self._messages.pop(user.id, [])
 
+    def flush_grouped(self, user: User) -> list[Messages]:
+        return self._group(self.flush(user))
+
+    @staticmethod
+    def _group(messages: Messages) -> list[Messages]:
+        groups: list[Messages] = []
+        ordered_messages = sorted(messages, key=lambda m: m.message_id)
+
+        for message in ordered_messages:
+            if not groups:
+                groups.append([message])
+                continue
+            if message.media_group_id is not None and message.media_group_id == groups[-1][-1].media_group_id:
+                groups[-1].append(message)
+            else:
+                groups.append([message])
+
+        return groups
+
 
 @dataclass(frozen=True, slots=True)
 class Services:
