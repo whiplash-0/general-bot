@@ -54,7 +54,10 @@ async def on_message_buffer_and_schedule_clip_action_selection(
                 ],
             ]
         )
-        await message.answer(f'Got {len(clip_messages)} clips', reply_markup=keyboard)
+        await message.answer(
+            f'Got {len(clip_messages)} clip{"" if len(clip_messages) == 1 else "s"}',
+            reply_markup=keyboard,
+        )
 
     services.task_scheduler.schedule(
         send_action_selection,
