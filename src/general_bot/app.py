@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import sys
 from typing import Any
@@ -8,18 +9,21 @@ from loguru import logger
 
 from general_bot import handlers
 from general_bot.services import Services
-from general_bot.settings import settings
+from general_bot.settings import Settings
 from general_bot.types import Handler, MiddlewareData
 
 
 def run() -> None:
+    args = _parse_args()
+    settings = Settings.load(args.dev)
     _configure_logging()
-    asyncio.run(_main())
+    asyncio.run(_main(settings))
 
 
-async def _main() -> None:
+async def _main(settings: Settings) -> None:
     dp = Dispatcher()
     dp['services'] = Services()
+    dp['settings'] = settings
     dp.include_router(handlers.router)
 
     @dp.update.middleware()
@@ -45,3 +49,13 @@ def _configure_logging() -> None:
         backtrace=False,
         diagnose=False,
     )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--dev',
+        action='store_true',
+        help='Run bot in development mode',
+    )
+    return parser.parse_args()

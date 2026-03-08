@@ -7,9 +7,9 @@ from aiogram import Bot, Router
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaVideo, Message
 
-from general_bot.settings import settings
 from general_bot.domain import normalize_video_volume
 from general_bot.services import Services
+from general_bot.settings import Settings
 from general_bot.types import ChatId
 
 router = Router()
@@ -25,7 +25,11 @@ class ClipCallbackData(CallbackData, prefix='clip'):
 
 
 @router.message()
-async def on_message_buffer_and_schedule_action_selection(message: Message, services: Services) -> None:
+async def on_message_buffer_and_schedule_clip_action_selection(
+    message: Message,
+    services: Services,
+    settings: Settings,
+) -> None:
     # Channel or chat may also send a message
     if message.from_user is None:
         return
@@ -60,7 +64,13 @@ async def on_message_buffer_and_schedule_action_selection(message: Message, serv
 
 
 @router.callback_query(ClipCallbackData.filter())
-async def on_clip_action(callback: CallbackQuery, callback_data: ClipCallbackData, bot: Bot, services: Services) -> None:
+async def on_clip_action(
+    callback: CallbackQuery,
+    callback_data: ClipCallbackData,
+    bot: Bot,
+    services: Services,
+    settings: Settings,
+) -> None:
     await callback.answer()
     # In inline-mode callbacks Telegram provides `inline_message_id` instead of `message`
     if callback.message is None:
