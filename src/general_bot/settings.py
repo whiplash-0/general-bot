@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     bot_token: str
     allowlist: list[int]
 
-    forward_batch_timeout: timedelta = timedelta(seconds=0.5)
+    forward_batch_timeout: timedelta = timedelta(seconds=0.25)
     normalization_loudness: float = -14
 
     model_config = _CONFIG
