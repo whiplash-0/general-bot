@@ -10,7 +10,7 @@ from loguru import logger
 from general_bot import handlers
 from general_bot.services import Services
 from general_bot.settings import Settings
-from general_bot.types import Handler, MiddlewareData
+from general_bot.types import Data, Handler
 
 
 def run() -> None:
@@ -27,7 +27,7 @@ async def _main(settings: Settings) -> None:
     dp.include_router(handlers.router)
 
     @dp.update.middleware()
-    async def enforce_allowlist(handler: Handler, update: Update, data: MiddlewareData) -> Any:
+    async def enforce_allowlist(handler: Handler, update: Update, data: Data) -> Any:
         user: User | None = data.get('event_from_user')
         if user is None:
             return None
