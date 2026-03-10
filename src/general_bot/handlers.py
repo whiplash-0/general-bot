@@ -3,9 +3,10 @@ from collections.abc import Sequence
 from enum import StrEnum, auto
 from textwrap import dedent
 
-from aiogram import Bot, Router
+from aiogram import Bot, Dispatcher, Router
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaVideo, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, ErrorEvent, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaVideo, Message
+from loguru import logger
 
 from general_bot.domain import normalize_video_volume
 from general_bot.services import Services
@@ -22,6 +23,12 @@ class ClipAction(StrEnum):
 
 class ClipCallbackData(CallbackData, prefix='clip'):
     action: ClipAction
+
+
+@router.error()
+async def on_error_shutdown(_: ErrorEvent, dispatcher: Dispatcher) -> None:
+    logger.exception('Handler exception')
+    await dispatcher.stop_polling()
 
 
 @router.message()
