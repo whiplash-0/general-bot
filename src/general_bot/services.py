@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 
 from aiogram.types import Message, User
 
+from general_bot.task_supervisor import TaskSupervisor
 from general_bot.types import UserId
 
 # Function that returns a coroutine when called.
@@ -43,15 +44,16 @@ class TaskScheduler:
     propagates normally.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, task_supervisor: TaskSupervisor) -> None:
         self._tasks: dict[UserId, asyncio.Task[None]] = {}
         self._generation: dict[UserId, int] = {}
+        self._task_supervisor = task_supervisor
 
     def schedule(self, job: Job, *, user: User, delay: timedelta) -> None:
         self.cancel(user)
         self._generation[user.id] = self._generation.get(user.id, 0) + 1
-        self._tasks[user.id] = asyncio.create_task(
-            self._delayed(user.id, job, self._generation[user.id], delay)
+        self._tasks[user.id] = self._task_supervisor.spawn(
+            self._delayed(user.id, job, self._generation[user.id], delay),
         )
 
     def cancel(self, user: User) -> None:
@@ -109,5 +111,5 @@ class MessageBuffer:
 
 @dataclass(frozen=True, slots=True)
 class Services:
-    task_scheduler: TaskScheduler = field(default_factory=TaskScheduler)
-    message_buffer: MessageBuffer = field(default_factory=MessageBuffer)
+    task_scheduler: TaskScheduler
+    message_buffer: MessageBuffer

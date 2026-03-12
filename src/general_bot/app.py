@@ -9,8 +9,9 @@ from aiogram.types import Update, User
 from loguru import logger
 
 from general_bot import handlers
-from general_bot.services import Services
+from general_bot.services import MessageBuffer, Services, TaskScheduler
 from general_bot.settings import Settings
+from general_bot.task_supervisor import TaskFailure, TaskSupervisor
 from general_bot.types import Data, Handler
 
 
@@ -23,7 +24,14 @@ def run() -> None:
 
 async def _main(settings: Settings) -> None:
     dp = Dispatcher()
-    dp['services'] = Services()
+
+    def on_failure(_: TaskFailure):
+        return dp.stop_polling()
+
+    dp['services'] = Services(
+        task_scheduler=TaskScheduler(task_supervisor=TaskSupervisor(on_failure=on_failure)),
+        message_buffer=MessageBuffer(),
+    )
     dp['settings'] = settings
     dp.include_router(handlers.router)
 
