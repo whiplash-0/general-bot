@@ -42,14 +42,15 @@ async def on_message_buffer_and_schedule_clip_action_selection(
         return
 
     user = message.from_user
-    services.message_buffer.append(message, user=user)
+    chat_id = message.chat.id
+    services.chat_message_buffer.append(message, chat_id=chat_id)
 
     async def send_action_selection() -> None:
-        messages = services.message_buffer.peek(user)
+        messages = services.chat_message_buffer.peek(chat_id)
         clip_messages = [m for m in messages if m.video is not None]
 
         if not clip_messages:
-            services.message_buffer.flush(user)
+            services.chat_message_buffer.flush(chat_id)
             await message.answer('No clips received')
             return
 
@@ -85,8 +86,9 @@ async def on_clip_action(
     # In inline-mode callbacks Telegram provides `inline_message_id` instead of `message`
     if callback.message is None:
         return
-    if (user := callback.from_user) is None:
+    if callback.from_user is None:
         return
+    chat_id = callback.message.chat.id
 
     updated_text = dedent(
         f"""
@@ -99,7 +101,7 @@ async def on_clip_action(
 
     match callback_data.action:
         case ClipAction.NORMALIZE:
-            message_groups = services.message_buffer.flush_grouped(user)
+            message_groups = services.chat_message_buffer.flush_grouped(chat_id)
             cpu_semaphore = asyncio.Semaphore(1)
 
             async def normalize_message_clip_volume(message: Message) -> bytes | None:
@@ -123,10 +125,10 @@ async def on_clip_action(
                     asyncio.gather(*(normalize_message_clip_volume(m) for m in message_group)),
                     timeout=60,
                 )
-                await _resend_message_group(bot, user.id, message_group, replacement_videos)
+                await _resend_message_group(bot, chat_id, message_group, replacement_videos)
 
         case ClipAction.CANCEL:
-            services.message_buffer.flush(user)
+            services.chat_message_buffer.flush(chat_id)
             await callback.message.answer('Canceled')
 
 

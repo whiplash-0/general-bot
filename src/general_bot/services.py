@@ -6,7 +6,7 @@ from datetime import timedelta
 from aiogram.types import Message, User
 
 from general_bot.task_supervisor import TaskSupervisor
-from general_bot.types import UserId
+from general_bot.types import ChatId, UserId
 
 # Function that returns a coroutine when called.
 # Example: lambda: send_message(user_id)
@@ -62,21 +62,34 @@ class TaskScheduler:
             return
 
 
-class MessageBuffer:
+class ChatMessageBuffer:
+    """Chat-scoped buffer for incoming Telegram messages.
+
+    Messages are stored by `chat_id`. `peek()` is non-destructive, while
+    `flush()` and `flush_grouped()` consume buffered messages for the chat.
+    Grouping is computed in `message_id` order.
+
+    Note:
+        In Telegram private chats, `chat_id` is equal to the sender's
+        `user_id`. Therefore either identifier may be used as the key
+        when the bot operates exclusively in personal chats.
+    """
+
     def __init__(self) -> None:
-        self._messages: dict[UserId, Messages] = {}
+        self._messages: dict[ChatId, Messages] = {}
 
-    def append(self, message: Message, *, user: User) -> None:
-        self._messages.setdefault(user.id, []).append(message)
+    def append(self, message: Message, *, chat_id: ChatId) -> None:
+        self._messages.setdefault(chat_id, []).append(message)
 
-    def peek(self, user: User) -> Messages:
-        return list(self._messages.get(user.id, []))
+    def peek(self, chat_id: ChatId) -> Messages:
+        return list(self._messages.get(chat_id, []))
 
-    def flush(self, user: User) -> Messages:
-        return self._messages.pop(user.id, [])
+    def flush(self, chat_id: ChatId) -> Messages:
+        return self._messages.pop(chat_id, [])
 
-    def flush_grouped(self, user: User) -> MessageGroups:
-        return self._group(self.flush(user))
+    def flush_grouped(self, chat_id: ChatId) -> MessageGroups:
+        """Flush and group messages by contiguous `media_group_id`."""
+        return self._group(self.flush(chat_id))
 
     @staticmethod
     def _group(messages: Messages) -> MessageGroups:
@@ -98,4 +111,4 @@ class MessageBuffer:
 @dataclass(frozen=True, slots=True)
 class Services:
     task_scheduler: TaskScheduler
-    message_buffer: MessageBuffer
+    chat_message_buffer: ChatMessageBuffer

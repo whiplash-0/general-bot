@@ -9,7 +9,7 @@ from aiogram.types import Update, User
 from loguru import logger
 
 from general_bot import handlers
-from general_bot.services import MessageBuffer, Services, TaskScheduler
+from general_bot.services import ChatMessageBuffer, Services, TaskScheduler
 from general_bot.settings import Settings
 from general_bot.task_supervisor import TaskFailure, TaskSupervisor
 from general_bot.types import Data, Handler
@@ -30,7 +30,7 @@ async def _main(settings: Settings) -> None:
 
     dp['services'] = Services(
         task_scheduler=TaskScheduler(task_supervisor=TaskSupervisor(on_failure=on_failure)),
-        message_buffer=MessageBuffer(),
+        chat_message_buffer=ChatMessageBuffer(),
     )
     dp['settings'] = settings
     dp.include_router(handlers.router)
