@@ -38,7 +38,6 @@ async def on_message_buffer_and_schedule_clip_action_selection(
     services: Services,
     settings: Settings,
 ) -> None:
-    user = message.from_user
     chat_id = message.chat.id
     services.chat_message_buffer.append(message, chat_id=chat_id)
 
@@ -66,7 +65,7 @@ async def on_message_buffer_and_schedule_clip_action_selection(
 
     services.task_scheduler.schedule(
         send_action_selection,
-        user=user,
+        key=chat_id,
         delay=settings.forward_batch_timeout,
     )
 
