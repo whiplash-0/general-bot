@@ -49,6 +49,15 @@
 - End chat responses with short, practical next-step suggestions when natural follow-up actions exist.
 - Keep next-step suggestions concise and optional (do not force extra work when none is needed).
 
+### Plan mode behavior
+
+When working in plan/spec mode:
+
+- Prefer asking clarifying questions instead of making assumptions.
+- If the task is ambiguous, ask multiple questions before proposing a plan.
+- Favor more questions rather than fewer to reduce incorrect plans.
+- Use numbered questions.
+
 ### Recommendation policy
 
 - Default to the smallest change that solves today's problem.
@@ -95,6 +104,30 @@ Also evaluate the following dimensions:
 - Method naming should reflect the abstraction level (infra vs domain).
 - Avoid expanding the public surface area without clear benefit.
 
+### Internal package `__init__.py` policy
+
+For internal packages, prefer an empty `__init__.py` by default.
+
+Rules:
+
+- Do not create package-level public APIs for internal packages unless explicitly requested.
+- Do not re-export symbols from submodules via `__init__.py` just for convenience.
+- Imports should usually reference the concrete module path directly.
+
+Preferred:
+
+from general_bot.infra.tasks import TaskScheduler
+from general_bot.infra.tasks import TaskSupervisor
+from general_bot.infra.s3 import S3Client
+
+Avoid by default:
+
+from general_bot.infra import TaskScheduler
+from general_bot.infra import S3Client
+
+Use package-level re-exports only when there is a clear, intentional reason
+to define a stable package API.
+
 ### Maintainability
 
 - Prefer straightforward implementations that are easy to modify.
@@ -132,41 +165,15 @@ Absence of bugs does **not** mean the review is complete. Design quality, clarit
 
 Use Conventional Commits.
 
-### Commit scope discipline
+### Commit message discipline
 
-- Keep commits conceptually coherent by subsystem and intent.
-- Do not ask to combine unrelated changes when scopes are clearly different
-  (for example: `AGENTS.md` policy updates vs `src/` runtime code edits).
-- When unrelated local modifications exist, commit only files relevant to the requested change by default.
+Use Conventional Commits.
 
 Format:
 
 type(scope): short description
 
-Rules:
-- types: feat, fix, refactor, chore, docs, test
-- lowercase subject, imperative mood
-- subject ≤ 72 chars
-- add a body when reasoning matters
-- body uses normal sentence capitalization
-
-### Subject guidelines
-
-The subject should describe the **system-level change**, not the exact
-implementation detail.
-
-Prefer short semantic descriptions of the capability or behavior added or
-changed.
-
-Examples:
-
-- docs: add AGENTS.md with repository workflow guidelines
-- docs: document commit scope rules
-- feat(infra): add fail-fast detached task supervision
-- refactor(services): simplify task scheduling logic
-
-Implementation details such as **class names, modules, or files** should
-normally appear in the commit body.
+Optional body explaining the reasoning.
 
 Example:
 
@@ -175,9 +182,94 @@ feat(infra): add fail-fast detached task supervision
 Introduce `TaskSupervisor` for detached asyncio tasks with centralized
 exception handling and a one-shot failure hook.
 
-### Avoid vague subjects
+---
 
-Avoid overly abstract subjects such as:
+### Types
+
+Allowed commit types:
+
+- feat — add a new capability or user-visible behavior
+- fix — correct a bug or unintended behavior
+- refactor — restructure code without changing behavior
+- perf — improve performance without changing behavior
+- test — add or update automated tests
+- docs — documentation-only changes
+- chore — maintenance tasks, tooling updates, or repository housekeeping
+
+Use the type that best reflects the **intent of the change**, not the file modified.  
+Prefer the most specific type that matches the intent.  
+Do not invent new commit types.
+
+---
+
+### Breaking changes
+
+Agents must explicitly evaluate whether a commit introduces a backward-incompatible change.
+
+Typical breaking changes include:
+
+- renamed or removed environment variables
+- renamed, removed, or semantically changed settings fields
+- changed configuration file formats or required values
+- changed public function/class/module interfaces used by callers
+- changed CLI arguments, flags, or behavior relied on by users
+- changed persisted data formats or storage schemas
+- renamed or removed domain concepts referenced by existing code
+
+If a change is backward-incompatible, the commit must be marked as breaking.
+
+Use one of the following forms:
+
+type!: short description
+type(scope)!: short description
+
+A commit marked with `!` must also include a footer describing the migration.
+
+Format:
+
+BREAKING CHANGE: <describe exactly what changed and what must be updated>
+
+The footer must state the concrete migration required by existing users,
+deployments, or environments.
+
+Example:
+
+feat!: add superuser-aware fail-fast shutdown notifications
+
+BREAKING CHANGE: replace `USER_ALLOWLIST` with `SUPERUSER_IDS` and `USER_IDS`.
+Existing `.env` files and code reading `Settings.user_allowlist` must be updated.
+
+When configuration contracts (`.env`, `Settings`, CLI flags, file formats)
+change, agents must assume the change may be breaking and explicitly
+justify whether a breaking change marker is required.
+
+---
+
+### Subject rules
+
+The subject should describe the **system-level change**, not the exact
+implementation detail.
+
+Rules:
+
+- lowercase subject
+- imperative mood
+- ≤ 72 characters
+- describe **what capability or behavior changed**
+
+Prefer semantic descriptions of the change rather than listing files or classes.
+
+Good examples:
+
+feat(infra): add fail-fast detached task supervision  
+fix(handlers): acknowledge callback queries
+refactor(services): key chat message buffer by chat id  
+perf(domain): reduce video normalization overhead
+test(services): add chat message buffer tests
+docs: add `AGENTS.md` with repository workflow guidelines  
+chore(deps): bump aiogram to 3.0.0
+
+Avoid vague subjects such as:
 
 - "add workflow instructions"
 - "update agent rules"
@@ -185,69 +277,187 @@ Avoid overly abstract subjects such as:
 
 Subjects should clearly indicate **what capability changed**.
 
-### Scope
+Implementation details such as class names, modules, or files should
+normally appear in the commit body.
 
-The scope should represent a **stable semantic subsystem of the repository**.
+---
 
-A scope is appropriate when a change clearly belongs to a long-lived
-component or conceptual area of the system.
+### Referencing files and entities
 
-Scopes may match module or directory names **when those names represent
-real architectural boundaries**.
-
-Examples of valid subsystem scopes in this repository:
-
-- `app` — application bootstrap and runtime wiring
-- `handlers` — Telegram handlers and routing logic
-- `services` — application services and domain utilities
-- `infra` — shared infrastructure utilities (logging, async helpers, supervisors)
-- `settings` — configuration loading, validation, and environment settings
-- `deps` — dependency changes
-
-Avoid inventing ad-hoc scopes based only on:
-
-- a single touched file
-- a temporary implementation detail
-- an arbitrary directory that does not represent a subsystem
-
-Prefer **precise established subsystem names** over broad buckets when both are valid.
-
-### Root-level files
-
-Changes to repository-level files (for example `README.md`, `AGENTS.md`,
-`.gitignore`, `pyproject.toml`) should usually **omit scope**, unless the
-change clearly belongs to a defined subsystem such as `deps`.
+When commit messages reference files, classes, modules, or functions,
+wrap their names in backticks so they render clearly on GitHub.
 
 Examples:
 
-docs: update README with setup instructions  
-chore: update .gitignore  
+Rename `MessageBuffer` to `ChatMessageBuffer`  
+Update `AGENTS.md` commit guidelines  
+Move logic into `TaskSupervisor`  
+Adjust `handlers.py` routing filter  
+
+Use this formatting consistently for:
+
+- files (`AGENTS.md`, `README.md`)
+- modules (`handlers.py`)
+- classes (`TaskSupervisor`)
+- functions (`normalize_video_volume`)
+
+Backticks improve readability in GitHub commit messages and should be preserved.
+
+---
+
+### Shell safety when creating commit messages
+
+Backticks have special meaning in shells (command substitution).  
+If a commit message is passed via a shell command using **double quotes**, the
+shell will try to execute the backticked text as a command.
+
+Incorrect (will break):
+
+git commit -m "Refactor `TaskScheduler` API"
+
+Correct approaches:
+
+1. Prefer **single quotes** when backticks appear:
+
+git commit -m 'refactor(services): make task scheduler key-agnostic' \
+           -m 'Replace `TaskScheduler` user-coupled API with generic `Hashable` key.'
+
+2. Safest method (preferred for multi-line messages): use a heredoc:
+
+git commit -F - <<'EOF'
+refactor(services): make task scheduler key-agnostic
+
+Replace `TaskScheduler` user-coupled API with a generic `Hashable` key.
+Update handlers to schedule jobs using `chat_id`.
+EOF
+
+Rules for agents:
+
+- Never place backticks inside double-quoted commit messages.
+- Use single quotes or a heredoc when commit text contains backticks.
+- Backticked identifiers such as `TaskScheduler`, `AGENTS.md`, or
+  `normalize_video_volume` must be preserved literally.
+
+---
+
+### Referencing canonical repository files
+
+When a commit **primarily modifies a well-known repository document**, it
+is often clearer to mention that file directly in the subject.
+
+This applies especially to canonical project documents such as:
+
+- `AGENTS.md`
+- `README.md`
+- `CONTRIBUTING.md`
+- `CHANGELOG.md`
+
+Example:
+
+docs: expand `AGENTS.md` commit message guidelines
+
+However, do **not force filenames into the subject unnecessarily**.
+Prefer conceptual descriptions when the change is broader than a single file.
+
+Good:
+
+docs: expand `AGENTS.md` commit message guidelines
+
+Also good:
+
+docs: add deployment documentation
+
+---
+
+### Commit body guidelines
+
+Add a commit body when the reasoning behind the change is important.
+
+A body is recommended when:
+
+- the commit modifies multiple modules or subsystems
+- a refactor changes conceptual behavior or structure
+- a rename introduces a clearer abstraction
+- the reason for the change is not obvious from the subject
+- the commit prepares or enables a later change
+
+The body should explain **why the change was made**, not list the diff.
+
+Avoid bodies that simply restate code changes.
+
+Good:
+
+refactor(services): key chat message buffer by chat id
+
+Rename `MessageBuffer` to `ChatMessageBuffer` and key buffered messages
+by `chat_id` instead of aiogram `User`. Buffering belongs to chat context
+because messages are collected from chats and responses are sent back to
+chats.
+
+`TaskScheduler` remains user-keyed for now and will be refactored
+separately.
+
+Avoid bodies like:
+
+- renamed X
+- changed Y
+- updated Z
+
+---
+
+### Commit scope discipline
+
+The scope should represent a **stable semantic subsystem of the repository**.
+
+Scopes should correspond to long-lived architectural areas rather than
+temporary implementation details.
+
+Examples of valid scopes in this repository:
+
+- `app` — application bootstrap and runtime wiring
+- `handlers` — Telegram handlers and routing logic
+- `services` — application services and runtime state containers
+- `infra` — shared infrastructure utilities (async helpers, supervisors, S3)
+- `settings` — configuration loading and validation
+- `deps` — dependency updates
+
+Prefer **existing subsystem names** over inventing new scopes.
+
+Avoid choosing scope based only on:
+
+- a single touched file
+- a temporary implementation detail
+- a directory that does not represent an architectural boundary
+
+---
+
+### Root-level files
+
+Changes to repository-level files usually **omit scope**.
+
+Examples:
+
+docs: update `README.md` with setup instructions  
+chore: update `.gitignore`  
+docs: update `AGENTS.md` workflow rules  
+
+Use `deps` only for dependency changes:
+
 chore(deps): pin development dependencies
+
+---
 
 ### Generic infrastructure
 
 If a change introduces a **generic reusable module** not tied to a specific
-subsystem (e.g. async utilities, supervision helpers, logging
-infrastructure), prefer the `infra` scope.
+subsystem (for example async utilities or task supervision), use the
+`infra` scope.
 
 Example:
 
 feat(infra): add fail-fast task supervisor for detached asyncio tasks
 
-### Avoid incorrect scopes
-
-Do **not** choose scope based only on:
-
-- the directory where the file was added
-- where the module is currently imported
-
-For example, a generic async utility should **not** use:
-
-- `app`
-- `services`
-- `handlers`
-
-even if it is currently used there.
+---
 
 ### When scope is unclear
 
@@ -257,3 +467,15 @@ Examples:
 
 feat: add task supervisor utility  
 chore: update development workflow instructions
+
+---
+
+### Commit scope discipline
+
+Keep commits conceptually coherent by subsystem and intent.
+
+Do not combine unrelated changes in a single commit when scopes differ
+(for example: `AGENTS.md` policy updates vs `src/` runtime code edits).
+
+If unrelated local modifications exist, commit only files relevant to
+the requested change by default.
