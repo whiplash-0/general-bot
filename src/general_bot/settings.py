@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Delay used to batch forwarded messages before responding
     forward_batch_timeout: timedelta = timedelta(seconds=0.25)
 
+    # Padding line width in space units (1 unit ≈ width of one NBSP character)
+    message_width: int = 80
+    # Lowest year offered for clip store destinations
+    min_clip_year: int = 2022
+
     # Audio normalization (LUFS target and bitrate)
     normalization_loudness: float = -14
     normalization_bitrate: int = 128

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from aiogram.types import Message
 
+from general_bot.clip_store import ClipStore
 from general_bot.infra.tasks import TaskScheduler
 from general_bot.types import ChatId
 
@@ -58,5 +59,6 @@ class ChatMessageBuffer:
 
 @dataclass(frozen=True, slots=True)
 class Services:
-    task_scheduler: TaskScheduler
     chat_message_buffer: ChatMessageBuffer
+    task_scheduler: TaskScheduler
+    clip_store: ClipStore

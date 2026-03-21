@@ -5,10 +5,13 @@ import sys
 from typing import Any
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import Update, User
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, Update, User
 from loguru import logger
 
-from general_bot import handlers
+from general_bot.clip_store import ClipStore
+from general_bot.handlers.router import router as handlers_router
+from general_bot.infra.s3 import S3Client, S3Config
 from general_bot.infra.tasks import TaskFailure, TaskScheduler, TaskSupervisor
 from general_bot.services import ChatMessageBuffer, Services
 from general_bot.settings import Settings
@@ -23,9 +26,20 @@ def run() -> None:
 
 
 async def _main(settings: Settings) -> None:
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
 
-    async with Bot(settings.bot_token.get_secret_value()) as bot:
+    async with (
+        Bot(settings.bot_token.get_secret_value()) as bot,
+        S3Client(
+            S3Config(
+                endpoint_url=settings.s3.endpoint_url,
+                region=settings.s3.region,
+                bucket=settings.s3.bucket,
+                access_key_id=settings.s3.access_key_id,
+                secret_access_key=settings.s3.secret_access_key.get_secret_value(),
+            )
+        ) as s3_client,
+    ):
         async def on_failure_stop(_: TaskFailure | None = None) -> None:
             await _notify_superusers_and_stop_polling(
                 bot=bot,
@@ -34,12 +48,15 @@ async def _main(settings: Settings) -> None:
             )
 
         dp['services'] = Services(
-            task_scheduler=TaskScheduler(task_supervisor=TaskSupervisor(on_failure=on_failure_stop)),
             chat_message_buffer=ChatMessageBuffer(),
+            task_scheduler=TaskScheduler(
+                task_supervisor=TaskSupervisor(on_failure=on_failure_stop),
+            ),
+            clip_store=ClipStore(s3_client),
         )
         dp['settings'] = settings
         dp['on_failure'] = on_failure_stop
-        dp.include_router(handlers.router)
+        dp.include_router(handlers_router)
 
         @dp.update.middleware()
         async def enforce_allowlist(handler: Handler, update: Update, data: Data) -> Any:
