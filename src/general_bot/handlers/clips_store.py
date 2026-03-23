@@ -315,14 +315,13 @@ async def _on_store_back(
                 await handle_stale_selection(message=message, state=state)
                 return
             year, season, universe = selection
+            clip_group = ClipGroup(year=year, season=season, universe=universe)
             await show_or_stale(
                 show_menu=_show_store_sub_season_menu,
                 message=message,
                 state=state,
                 settings=settings,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
             )
 
 
@@ -373,14 +372,13 @@ async def _on_store_select(
                 await handle_stale_selection(message=message, state=state)
                 return
             year, season = selection
+            clip_group = ClipGroup(year=year, season=season, universe=universe)
             await show_or_stale(
                 show_menu=_show_store_sub_season_menu,
                 message=message,
                 state=state,
                 settings=settings,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
             )
 
         case MenuStep.SUB_SEASON:
@@ -390,14 +388,13 @@ async def _on_store_select(
                 await handle_stale_selection(message=message, state=state)
                 return
             year, season, universe = selection
+            clip_group = ClipGroup(year=year, season=season, universe=universe)
             await show_or_stale(
                 show_menu=_show_store_scope_menu,
                 message=message,
                 state=state,
                 settings=settings,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
                 sub_season=sub_season,
             )
 
@@ -534,9 +531,7 @@ async def _show_store_sub_season_menu(
     message: Message,
     state: FSMContext,
     settings: Settings,
-    year: int,
-    season: Season,
-    universe: Universe,
+    clip_group: ClipGroup,
 ) -> bool:
     await show_fixed_option_menu(
         flow=_STORE_FLOW,
@@ -545,9 +540,9 @@ async def _show_store_sub_season_menu(
         message_width=settings.message_width,
         step=MenuStep.SUB_SEASON,
         prompt='Select sub-season:',
-        year=year,
-        season=season,
-        universe=universe,
+        year=clip_group.year,
+        season=clip_group.season,
+        universe=clip_group.universe,
         option_universe=tuple(SubSeason),
         available_options=tuple(SubSeason),
         option_value=lambda sub_season: sub_season.value,
@@ -561,9 +556,7 @@ async def _show_store_scope_menu(
     message: Message,
     state: FSMContext,
     settings: Settings,
-    year: int,
-    season: Season,
-    universe: Universe,
+    clip_group: ClipGroup,
     sub_season: SubSeason,
 ) -> bool:
     await show_fixed_option_menu(
@@ -573,9 +566,9 @@ async def _show_store_scope_menu(
         message_width=settings.message_width,
         step=MenuStep.SCOPE,
         prompt='Select scope:',
-        year=year,
-        season=season,
-        universe=universe,
+        year=clip_group.year,
+        season=clip_group.season,
+        universe=clip_group.universe,
         sub_season=sub_season,
         option_universe=(ALL_SCOPES_CALLBACK_VALUE, *Scope),
         available_options=tuple(Scope),

@@ -630,9 +630,7 @@ async def test_store_sub_season_menu_uses_fixed_snake_layout() -> None:
         message=message,
         state=state,
         settings=_settings(),
-        year=2024,
-        season=Season.S2,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2024, season=Season.S2, universe=Universe.WEST),
     )
 
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
@@ -650,9 +648,7 @@ async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None
     await _show_fetch_scope_menu(
         message=message,
         state=state,
-        year=2024,
-        season=Season.S1,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
         sub_season=SubSeason.NONE,
         services=services,
         settings=_settings(),
@@ -671,9 +667,7 @@ async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None
     await _show_fetch_scope_menu(
         message=message_single,
         state=state_single,
-        year=2024,
-        season=Season.S1,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
         sub_season=SubSeason.NONE,
         services=services,
         settings=_settings(),
@@ -748,9 +742,7 @@ async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> No
     await _show_fetch_sub_season_menu(
         message=message_none_only,
         state=state_none_only,
-        year=2024,
-        season=Season.S1,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
         services=services,
         settings=_settings(),
         sub_groups=[ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.COLLECTION)],
@@ -770,9 +762,7 @@ async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> No
     await _show_fetch_sub_season_menu(
         message=message_with_extra,
         state=state_with_extra,
-        year=2024,
-        season=Season.S1,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
         services=services,
         settings=_settings(),
         sub_groups=[
@@ -800,9 +790,7 @@ async def test_store_scope_menu_uses_fixed_scope_grid_with_dummy_all_slot() -> N
         message=message,
         state=state,
         settings=_settings(),
-        year=2024,
-        season=Season.S1,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
         sub_season=SubSeason.NONE,
     )
 
@@ -1148,9 +1136,7 @@ async def test_send_fetch_scopes_sends_separator_only_between_scope_blocks_and_d
         bot=bot,
         chat_id=9,
         services=services,
-        year=2025,
-        season=Season.S1,
-        universe=Universe.WEST,
+        clip_group=ClipGroup(year=2025, season=Season.S1, universe=Universe.WEST),
         sub_season=SubSeason.NONE,
         scopes=[Scope.COLLECTION, Scope.EXTRA],
     )

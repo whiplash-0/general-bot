@@ -252,12 +252,11 @@ async def _on_fetch_back(
                 await handle_stale_selection(message=message, state=state)
                 return
             year, season, universe = selection
+            clip_group = ClipGroup(year=year, season=season, universe=universe)
 
             sub_groups = await _fetch_sub_groups(
                 services=services,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
             )
             if sub_groups is None:
                 await handle_stale_selection(message=message, state=state)
@@ -279,9 +278,7 @@ async def _on_fetch_back(
                 show_menu=_show_fetch_sub_season_menu,
                 message=message,
                 state=state,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
                 services=services,
                 settings=settings,
                 sub_groups=sub_groups,
@@ -337,13 +334,12 @@ async def _on_fetch_select(
                 await handle_stale_selection(message=message, state=state)
                 return
             year, season = selection
+            clip_group = ClipGroup(year=year, season=season, universe=universe)
             await show_or_stale(
                 show_menu=_show_fetch_sub_season_menu,
                 message=message,
                 state=state,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
                 services=services,
                 settings=settings,
             )
@@ -373,12 +369,11 @@ async def _on_fetch_select(
                 await handle_stale_selection(message=message, state=state)
                 return
             year, season, universe, sub_season = selection
+            clip_group = ClipGroup(year=year, season=season, universe=universe)
 
             sub_groups = await _fetch_sub_groups(
                 services=services,
-                year=year,
-                season=season,
-                universe=universe,
+                clip_group=clip_group,
             )
             if sub_groups is None:
                 await handle_stale_selection(message=message, state=state)
@@ -422,9 +417,7 @@ async def _on_fetch_select(
                     bot=bot,
                     chat_id=message.chat.id,
                     services=services,
-                    year=year,
-                    season=season,
-                    universe=universe,
+                    clip_group=clip_group,
                     sub_season=sub_season,
                     scopes=scopes,
                 )
@@ -533,9 +526,7 @@ async def _show_fetch_sub_season_menu(
     *,
     message: Message,
     state: FSMContext,
-    year: int,
-    season: Season,
-    universe: Universe,
+    clip_group: ClipGroup,
     services: Services,
     settings: Settings,
     sub_groups: list[ClipSubGroup] | None = None,
@@ -543,9 +534,7 @@ async def _show_fetch_sub_season_menu(
     if sub_groups is None:
         sub_groups = await _fetch_sub_groups(
             services=services,
-            year=year,
-            season=season,
-            universe=universe,
+            clip_group=clip_group,
         )
     if sub_groups is None:
         return False
@@ -555,9 +544,7 @@ async def _show_fetch_sub_season_menu(
         return await _show_fetch_scope_menu(
             message=message,
             state=state,
-            year=year,
-            season=season,
-            universe=universe,
+            clip_group=clip_group,
             sub_season=SubSeason.NONE,
             services=services,
             settings=settings,
@@ -570,9 +557,9 @@ async def _show_fetch_sub_season_menu(
         message_width=settings.message_width,
         step=MenuStep.SUB_SEASON,
         prompt='Select sub-season:',
-        year=year,
-        season=season,
-        universe=universe,
+        year=clip_group.year,
+        season=clip_group.season,
+        universe=clip_group.universe,
         option_universe=tuple(SubSeason),
         available_options=sub_seasons,
         option_value=encode_sub_season,
@@ -585,9 +572,7 @@ async def _show_fetch_scope_menu(
     *,
     message: Message,
     state: FSMContext,
-    year: int,
-    season: Season,
-    universe: Universe,
+    clip_group: ClipGroup,
     sub_season: SubSeason,
     services: Services,
     settings: Settings,
@@ -596,9 +581,7 @@ async def _show_fetch_scope_menu(
     if sub_groups is None:
         sub_groups = await _fetch_sub_groups(
             services=services,
-            year=year,
-            season=season,
-            universe=universe,
+            clip_group=clip_group,
         )
     if sub_groups is None:
         return False
@@ -616,9 +599,9 @@ async def _show_fetch_scope_menu(
         message_width=settings.message_width,
         step=MenuStep.SCOPE,
         prompt='Select scope:',
-        year=year,
-        season=season,
-        universe=universe,
+        year=clip_group.year,
+        season=clip_group.season,
+        universe=clip_group.universe,
         sub_season=sub_season,
         option_universe=(ALL_SCOPES_CALLBACK_VALUE, *Scope),
         available_options=available_scope_options,
@@ -633,14 +616,10 @@ async def _send_fetch_scopes(
     bot: Bot,
     chat_id: ChatId,
     services: Services,
-    year: int,
-    season: Season,
-    universe: Universe,
+    clip_group: ClipGroup,
     sub_season: SubSeason,
     scopes: Sequence[Scope],
 ) -> None:
-    clip_group = ClipGroup(year=year, season=season, universe=universe)
-
     for index, scope in enumerate(scopes):
         if index > 0:
             await bot.send_message(chat_id=chat_id, text='.')
@@ -685,12 +664,10 @@ async def _send_stored_clip_batch(
 async def _fetch_sub_groups(
     *,
     services: Services,
-    year: int,
-    season: Season,
-    universe: Universe,
+    clip_group: ClipGroup,
 ) -> list[ClipSubGroup] | None:
     try:
-        return await services.clip_store.list_sub_groups(ClipGroup(year=year, season=season, universe=universe))
+        return await services.clip_store.list_sub_groups(clip_group)
     except ClipGroupNotFoundError:
         return None
 
