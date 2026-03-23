@@ -128,7 +128,7 @@ class _FetchClipStore:
         self.calls: list[tuple[ClipGroup, ClipSubGroup]] = []
         self.sub_groups = list(sub_groups or [])
 
-    async def fetch(self, *, clip_group: ClipGroup, clip_sub_group: ClipSubGroup, **kwargs):
+    async def fetch(self, *, clip_group: ClipGroup, clip_sub_group: ClipSubGroup):
         self.calls.append((clip_group, clip_sub_group))
         for batch in self.batches_by_scope[clip_sub_group.scope]:
             yield batch
@@ -664,7 +664,7 @@ async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None
 
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Extra', 'All'], ['Collection', DUMMY_BUTTON_TEXT], ['Back']]
+    assert _keyboard_rows(reply_markup) == [[DUMMY_BUTTON_TEXT, 'All'], ['Extra', 'Collection'], ['Back']]
 
     message_single = _fake_message(message_id=74)
     state_single = _FakeState()
@@ -686,7 +686,7 @@ async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None
     _assert_three_rows(reply_markup_single)
     assert _keyboard_rows(reply_markup_single) == [
         [DUMMY_BUTTON_TEXT, 'All'],
-        ['Collection', DUMMY_BUTTON_TEXT],
+        [DUMMY_BUTTON_TEXT, 'Collection'],
         ['Back'],
     ]
 
@@ -761,7 +761,7 @@ async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> No
     _assert_three_rows(reply_markup_none_only)
     assert _keyboard_rows(reply_markup_none_only) == [
         [DUMMY_BUTTON_TEXT, 'All'],
-        ['Collection', DUMMY_BUTTON_TEXT],
+        [DUMMY_BUTTON_TEXT, 'Collection'],
         ['Back'],
     ]
 
@@ -810,7 +810,7 @@ async def test_store_scope_menu_uses_fixed_scope_grid_with_dummy_all_slot() -> N
     _assert_format_kwargs(message.edit_text.await_args.kwargs, expected)
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Extra', DUMMY_BUTTON_TEXT], ['Collection', 'Source'], ['Back']]
+    assert _keyboard_rows(reply_markup) == [['Source', DUMMY_BUTTON_TEXT], ['Extra', 'Collection'], ['Back']]
 
 
 @pytest.mark.asyncio
@@ -1023,6 +1023,20 @@ async def test_send_stored_clip_batch_preserves_filename() -> None:
     media = bot.send_media_group.await_args.kwargs['media']
     assert media[0].media.filename == 'clips/2025-1-west/a.mp4'
     assert media[1].media.filename == 'clips/2025-1-west/b.mp4'
+
+
+@pytest.mark.asyncio
+async def test_send_stored_clip_batch_sends_single_clip_as_video() -> None:
+    bot = AsyncMock()
+
+    await _send_stored_clip_batch(
+        bot=bot,
+        chat_id=5,
+        clips=[Clip(filename='clips/2025-1-west/a.mp4', bytes=b'a')],
+    )
+
+    assert bot.send_video.await_args.kwargs['video'].filename == 'clips/2025-1-west/a.mp4'
+    bot.send_media_group.assert_not_awaited()
 
 
 @pytest.mark.asyncio

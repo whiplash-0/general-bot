@@ -23,10 +23,13 @@ from general_bot.services.clip_store import (
 
 _UUID_1 = uuid.UUID('018f05c1-f1a3-7b34-8d29-1f53a1c9d0e1').hex
 _UUID_2 = uuid.UUID('018f05c1-f1a3-7b34-8d29-1f53a1c9d0e2').hex
+_UUID_3 = uuid.UUID('018f05c1-f1a3-7b34-8d29-1f53a1c9d0e3').hex
 _UUID_4 = uuid.UUID('018f05c1-f1a3-7b34-8d29-1f53a1c9d0e4').hex
+_UUID_5 = uuid.UUID('018f05c1-f1a3-7b34-8d29-1f53a1c9d0e5').hex
 _HASH_A = 'a' * 64
 _HASH_B = 'b' * 64
 _HASH_C = 'c' * 64
+_HASH_D = 'd' * 64
 
 
 def test_store_result_adds_counts() -> None:
@@ -118,6 +121,7 @@ async def test_manifest_uses_top_level_list_with_preferred_field_order() -> None
         video_hash=_HASH_A,
         sub_season=SubSeason.A,
         scope=Scope.COLLECTION,
+        batch=1,
         order=1,
     )
 
@@ -129,10 +133,11 @@ async def test_manifest_uses_top_level_list_with_preferred_field_order() -> None
             'video_hash': _HASH_A,
             'sub_season': 'A',
             'scope': 'collection',
+            'batch': 1,
             'order': 1,
         }
     ]
-    assert list(payload[0]) == ['id', 'video_hash', 'sub_season', 'scope', 'order']
+    assert list(payload[0]) == ['id', 'video_hash', 'sub_season', 'scope', 'batch', 'order']
     assert list(Manifest.from_list(payload)) == [entry]
 
 
@@ -141,53 +146,92 @@ def test_manifest_rejects_old_object_wrapper_shape() -> None:
         Manifest.from_list({'clips': []})
 
 
-def test_manifest_reads_legacy_null_sub_season_and_rewrites_none() -> None:
-    manifest = Manifest.from_list(
-        [
-            {
-                'id': _UUID_1,
-                'video_hash': _HASH_A,
-                'sub_season': None,
-                'scope': 'extra',
-                'order': 1,
-            }
-        ]
-    )
-
-    assert list(manifest) == [
-        ManifestEntry(
-            id=_UUID_1,
-            video_hash=_HASH_A,
-            sub_season=SubSeason.NONE,
-            scope=Scope.EXTRA,
-            order=1,
+def test_manifest_rejects_legacy_null_sub_season() -> None:
+    with pytest.raises(ValueError, match='manifest `sub_season` must be a string'):
+        Manifest.from_list(
+            [
+                {
+                    'id': _UUID_1,
+                    'video_hash': _HASH_A,
+                    'sub_season': None,
+                    'scope': 'extra',
+                    'batch': 1,
+                    'order': 1,
+                }
+            ]
         )
-    ]
-    assert manifest.to_list() == [
-        {
-            'id': _UUID_1,
-            'video_hash': _HASH_A,
-            'sub_season': 'none',
-            'scope': 'extra',
-            'order': 1,
-        }
-    ]
+
+
+@pytest.mark.parametrize(
+    ('field', 'value', 'expected_message'),
+    [
+        ('batch', 0, 'manifest `batch` must be >= 1'),
+        ('order', 0, 'manifest `order` must be >= 1'),
+    ],
+)
+def test_manifest_rejects_non_positive_batch_and_order(
+    field: str,
+    value: int,
+    expected_message: str,
+) -> None:
+    payload = {
+        'id': _UUID_1,
+        'video_hash': _HASH_A,
+        'sub_season': 'A',
+        'scope': 'collection',
+        'batch': 1,
+        'order': 1,
+    }
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=expected_message):
+        Manifest.from_list([payload])
+
+
+def test_manifest_rejects_duplicate_batch_order_position() -> None:
+    with pytest.raises(
+        ValueError,
+        match='duplicate manifest position for sub_season=A scope=collection batch=2 order=1',
+    ):
+        Manifest.from_list(
+            [
+                {
+                    'id': _UUID_1,
+                    'video_hash': _HASH_A,
+                    'sub_season': 'A',
+                    'scope': 'collection',
+                    'batch': 2,
+                    'order': 1,
+                },
+                {
+                    'id': _UUID_2,
+                    'video_hash': _HASH_B,
+                    'sub_season': 'A',
+                    'scope': 'collection',
+                    'batch': 2,
+                    'order': 1,
+                },
+            ]
+        )
 
 
 @pytest.mark.asyncio
-async def test_fetch_returns_clips_with_portable_filenames() -> None:
+async def test_fetch_returns_grouped_clips_with_portable_filenames() -> None:
     manifest_key = _manifest_key(year=2024, season=Season.S1, universe=Universe.WEST)
     clip_key_1 = _clip_key(year=2024, season=Season.S1, universe=Universe.WEST, clip_id=_UUID_1)
     clip_key_2 = _clip_key(year=2024, season=Season.S1, universe=Universe.WEST, clip_id=_UUID_2)
+    clip_key_3 = _clip_key(year=2024, season=Season.S1, universe=Universe.WEST, clip_id=_UUID_3)
+    clip_key_4 = _clip_key(year=2024, season=Season.S1, universe=Universe.WEST, clip_id=_UUID_4)
     s3_client = _FakeS3Client(
         {
             manifest_key: _manifest_bytes(
                 [
                     ManifestEntry(
-                        id=_UUID_1,
-                        video_hash=_HASH_A,
+                        id=_UUID_4,
+                        video_hash=_HASH_D,
                         sub_season=SubSeason.A,
                         scope=Scope.COLLECTION,
+                        batch=2,
                         order=2,
                     ),
                     ManifestEntry(
@@ -195,12 +239,31 @@ async def test_fetch_returns_clips_with_portable_filenames() -> None:
                         video_hash=_HASH_B,
                         sub_season=SubSeason.A,
                         scope=Scope.COLLECTION,
+                        batch=1,
+                        order=2,
+                    ),
+                    ManifestEntry(
+                        id=_UUID_3,
+                        video_hash=_HASH_C,
+                        sub_season=SubSeason.A,
+                        scope=Scope.COLLECTION,
+                        batch=2,
+                        order=1,
+                    ),
+                    ManifestEntry(
+                        id=_UUID_1,
+                        video_hash=_HASH_A,
+                        sub_season=SubSeason.A,
+                        scope=Scope.COLLECTION,
+                        batch=1,
                         order=1,
                     ),
                 ]
             ),
-            clip_key_1: b'second',
-            clip_key_2: b'first',
+            clip_key_1: b'batch-1-first',
+            clip_key_2: b'batch-1-second',
+            clip_key_3: b'batch-2-first',
+            clip_key_4: b'batch-2-second',
         }
     )
     store = ClipStore(s3_client)
@@ -210,15 +273,18 @@ async def test_fetch_returns_clips_with_portable_filenames() -> None:
         async for batch in store.fetch(
             clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
             clip_sub_group=ClipSubGroup(sub_season=SubSeason.A, scope=Scope.COLLECTION),
-            batch_size=2,
         )
     ]
 
     assert batches == [
         [
-            Clip(filename=ClipStore._s3_key_to_filename(clip_key_2), bytes=b'first'),
-            Clip(filename=ClipStore._s3_key_to_filename(clip_key_1), bytes=b'second'),
-        ]
+            Clip(filename=ClipStore._s3_key_to_filename(clip_key_1), bytes=b'batch-1-first'),
+            Clip(filename=ClipStore._s3_key_to_filename(clip_key_2), bytes=b'batch-1-second'),
+        ],
+        [
+            Clip(filename=ClipStore._s3_key_to_filename(clip_key_3), bytes=b'batch-2-first'),
+            Clip(filename=ClipStore._s3_key_to_filename(clip_key_4), bytes=b'batch-2-second'),
+        ],
     ]
 
 
@@ -255,6 +321,7 @@ async def test_fetch_fails_with_requested_sub_group_fields_when_sub_group_is_mis
                             video_hash=_HASH_A,
                             sub_season=SubSeason.B,
                             scope=Scope.EXTRA,
+                            batch=1,
                             order=1,
                         )
                     ]
@@ -338,6 +405,7 @@ async def test_list_sub_groups_returns_unique_pairs() -> None:
                             video_hash=_HASH_A,
                             sub_season=SubSeason.A,
                             scope=Scope.COLLECTION,
+                            batch=1,
                             order=1,
                         ),
                         ManifestEntry(
@@ -345,13 +413,15 @@ async def test_list_sub_groups_returns_unique_pairs() -> None:
                             video_hash=_HASH_B,
                             sub_season=SubSeason.A,
                             scope=Scope.COLLECTION,
-                            order=2,
+                            batch=2,
+                            order=1,
                         ),
                         ManifestEntry(
                             id=_UUID_4,
                             video_hash=_HASH_C,
                             sub_season=SubSeason.NONE,
                             scope=Scope.EXTRA,
+                            batch=1,
                             order=1,
                         ),
                     ]
@@ -381,6 +451,7 @@ async def test_list_sub_groups_returns_sorted_pairs() -> None:
                             video_hash=_HASH_A,
                             sub_season=SubSeason.B,
                             scope=Scope.SOURCE,
+                            batch=1,
                             order=1,
                         ),
                         ManifestEntry(
@@ -388,6 +459,7 @@ async def test_list_sub_groups_returns_sorted_pairs() -> None:
                             video_hash=_HASH_B,
                             sub_season=SubSeason.NONE,
                             scope=Scope.EXTRA,
+                            batch=1,
                             order=1,
                         ),
                         ManifestEntry(
@@ -395,7 +467,8 @@ async def test_list_sub_groups_returns_sorted_pairs() -> None:
                             video_hash=_HASH_C,
                             sub_season=SubSeason.B,
                             scope=Scope.COLLECTION,
-                            order=2,
+                            batch=2,
+                            order=1,
                         ),
                     ]
                 )
@@ -449,6 +522,7 @@ async def test_store_treats_existing_current_group_id_as_duplicate(monkeypatch: 
                         video_hash=_HASH_A,
                         sub_season=SubSeason.A,
                         scope=Scope.COLLECTION,
+                        batch=1,
                         order=1,
                     )
                 ]
@@ -491,6 +565,7 @@ async def test_store_generates_fresh_id_for_non_s3_filename(monkeypatch: pytest.
             'video_hash': _HASH_A,
             'sub_season': 'B',
             'scope': 'extra',
+            'batch': 1,
             'order': 1,
         }
     ]
@@ -512,6 +587,7 @@ async def test_store_generates_new_id_for_same_group_s3_like_filename(monkeypatc
                         video_hash=_HASH_B,
                         sub_season=SubSeason.A,
                         scope=Scope.COLLECTION,
+                        batch=1,
                         order=1,
                     )
                 ]
@@ -534,6 +610,7 @@ async def test_store_generates_new_id_for_same_group_s3_like_filename(monkeypatc
             'video_hash': _HASH_B,
             'sub_season': 'A',
             'scope': 'collection',
+            'batch': 1,
             'order': 1,
         },
         {
@@ -541,7 +618,8 @@ async def test_store_generates_new_id_for_same_group_s3_like_filename(monkeypatc
             'video_hash': _HASH_C,
             'sub_season': 'A',
             'scope': 'collection',
-            'order': 2,
+            'batch': 2,
+            'order': 1,
         },
     ]
 
@@ -572,6 +650,7 @@ async def test_store_generates_new_id_for_s3_like_filename_from_different_group(
             'video_hash': _HASH_A,
             'sub_season': 'B',
             'scope': 'extra',
+            'batch': 1,
             'order': 1,
         }
     ]
@@ -590,6 +669,7 @@ async def test_store_treats_existing_video_hash_as_duplicate(monkeypatch: pytest
                         video_hash=_HASH_A,
                         sub_season=SubSeason.A,
                         scope=Scope.COLLECTION,
+                        batch=1,
                         order=1,
                     )
                 ]
@@ -637,6 +717,7 @@ async def test_store_generates_new_ids_for_same_call_repeated_unadopted_parsed_i
             'video_hash': _HASH_A,
             'sub_season': 'A',
             'scope': 'collection',
+            'batch': 1,
             'order': 1,
         },
         {
@@ -644,19 +725,19 @@ async def test_store_generates_new_ids_for_same_call_repeated_unadopted_parsed_i
             'video_hash': _HASH_B,
             'sub_season': 'A',
             'scope': 'collection',
+            'batch': 1,
             'order': 2,
         },
     ]
 
 
 @pytest.mark.asyncio
-async def test_store_deduplicates_same_call_by_video_hash_and_generates_new_id(
+async def test_store_deduplicates_same_call_by_video_hash_and_keeps_dense_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_hashes(monkeypatch, {b'first': _HASH_C, b'second': _HASH_C})
-    _patch_uuid7(monkeypatch, _UUID_4)
+    _patch_hashes(monkeypatch, {b'first': _HASH_C, b'second': _HASH_C, b'third': _HASH_D})
+    _patch_uuid7(monkeypatch, _UUID_4, _UUID_5)
     manifest_key = _manifest_key(year=2024, season=Season.S1, universe=Universe.WEST)
-    clip_key = _clip_key(year=2024, season=Season.S1, universe=Universe.WEST, clip_id=_UUID_4)
     s3_client = _FakeS3Client()
     store = ClipStore(s3_client)
 
@@ -664,20 +745,118 @@ async def test_store_deduplicates_same_call_by_video_hash_and_generates_new_id(
         [
             Clip(filename='first.mp4', bytes=b'first'),
             Clip(filename='second.mp4', bytes=b'second'),
+            Clip(filename='third.mp4', bytes=b'third'),
         ],
         clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
         clip_sub_group=ClipSubGroup(sub_season=SubSeason.C, scope=Scope.SOURCE),
     )
 
-    assert result.stored_count == 1
+    assert result.stored_count == 2
     assert result.duplicate_count == 1
-    assert s3_client.objects[clip_key] == b'first'
     assert json.loads(s3_client.objects[manifest_key].decode('utf-8')) == [
         {
             'id': _UUID_4,
             'video_hash': _HASH_C,
             'sub_season': 'C',
             'scope': 'source',
+            'batch': 1,
             'order': 1,
-        }
+        },
+        {
+            'id': _UUID_5,
+            'video_hash': _HASH_D,
+            'sub_season': 'C',
+            'scope': 'source',
+            'batch': 1,
+            'order': 2,
+        },
     ]
+
+
+@pytest.mark.asyncio
+async def test_store_creates_new_batch_per_call_and_resets_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_hashes(
+        monkeypatch,
+        {
+            b'first': _HASH_A,
+            b'second': _HASH_B,
+            b'third': _HASH_C,
+        },
+    )
+    _patch_uuid7(monkeypatch, _UUID_1, _UUID_2, _UUID_3)
+    manifest_key = _manifest_key(year=2024, season=Season.S1, universe=Universe.WEST)
+    s3_client = _FakeS3Client()
+    store = ClipStore(s3_client)
+    clip_group = ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST)
+    clip_sub_group = ClipSubGroup(sub_season=SubSeason.A, scope=Scope.COLLECTION)
+
+    first_result = await store.store(
+        [
+            Clip(filename='first.mp4', bytes=b'first'),
+            Clip(filename='second.mp4', bytes=b'second'),
+        ],
+        clip_group=clip_group,
+        clip_sub_group=clip_sub_group,
+    )
+    second_result = await store.store(
+        [Clip(filename='third.mp4', bytes=b'third')],
+        clip_group=clip_group,
+        clip_sub_group=clip_sub_group,
+    )
+
+    assert first_result == StoreResult(stored_count=2, duplicate_count=0)
+    assert second_result == StoreResult(stored_count=1, duplicate_count=0)
+    assert json.loads(s3_client.objects[manifest_key].decode('utf-8')) == [
+        {
+            'id': _UUID_1,
+            'video_hash': _HASH_A,
+            'sub_season': 'A',
+            'scope': 'collection',
+            'batch': 1,
+            'order': 1,
+        },
+        {
+            'id': _UUID_2,
+            'video_hash': _HASH_B,
+            'sub_season': 'A',
+            'scope': 'collection',
+            'batch': 1,
+            'order': 2,
+        },
+        {
+            'id': _UUID_3,
+            'video_hash': _HASH_C,
+            'sub_season': 'A',
+            'scope': 'collection',
+            'batch': 2,
+            'order': 1,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_store_all_duplicates_do_not_create_new_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_hashes(monkeypatch, {b'clip': _HASH_A})
+    manifest_key = _manifest_key(year=2024, season=Season.S1, universe=Universe.WEST)
+    original_manifest = [
+        ManifestEntry(
+            id=_UUID_1,
+            video_hash=_HASH_A,
+            sub_season=SubSeason.A,
+            scope=Scope.COLLECTION,
+            batch=1,
+            order=1,
+        )
+    ]
+    s3_client = _FakeS3Client({manifest_key: _manifest_bytes(original_manifest)})
+    store = ClipStore(s3_client)
+
+    result = await store.store(
+        [Clip(filename='incoming.mp4', bytes=b'clip')],
+        clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
+        clip_sub_group=ClipSubGroup(sub_season=SubSeason.A, scope=Scope.COLLECTION),
+    )
+
+    assert result == StoreResult(stored_count=0, duplicate_count=1)
+    assert json.loads(s3_client.objects[manifest_key].decode('utf-8')) == Manifest(original_manifest).to_list()
+    assert s3_client.put_calls == []

@@ -648,7 +648,6 @@ async def _send_fetch_scopes(
         async for batch in services.clip_store.fetch(
             clip_group=clip_group,
             clip_sub_group=ClipSubGroup(sub_season=sub_season, scope=scope),
-            batch_size=10,
         ):
             await _send_stored_clip_batch(bot=bot, chat_id=chat_id, clips=batch)
 

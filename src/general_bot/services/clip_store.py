@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import itertools
 import json
 import os
 import tempfile
@@ -21,7 +22,7 @@ _HASH_READ_SIZE = 64 * 1024
 _CLIP_GROUP_SEPARATOR = '-'
 # S3 keys often use '/' as delimiter, which is not safe for Telegram/local filenames.
 # This token replaces '/' when converting storage keys to portable filenames.
-_FILENAME_S3_DELIMITER_ESCAPE = '--'
+_FILENAME_S3_DELIMITER_ESCAPE = '::'
 
 
 class Season(IntEnum):
@@ -88,9 +89,9 @@ class SubSeason(StrEnum):
 class Scope(StrEnum):
     """Clip scope identifier."""
 
-    SOURCE = 'source'
     COLLECTION = 'collection'
     EXTRA = 'extra'
+    SOURCE = 'source'
 
 
 _SUB_SEASON_ORDER = {
@@ -131,6 +132,7 @@ class ManifestEntry:
     video_hash: str
     sub_season: SubSeason
     scope: Scope
+    batch: int
     order: int
 
 
@@ -162,11 +164,11 @@ class Manifest:
         """Return whether the manifest already contains a video hash."""
         return any(entry.video_hash == video_hash for entry in self._entries)
 
-    def next_order(self, *, sub_season: SubSeason, scope: Scope) -> int:
-        """Return the next logical order within a sub-group."""
+    def next_batch(self, *, sub_season: SubSeason, scope: Scope) -> int:
+        """Return the next logical batch within a sub-group."""
         return (
             max(
-                (entry.order for entry in self._entries if entry.scope is scope and entry.sub_season is sub_season),
+                (entry.batch for entry in self._entries if entry.scope is scope and entry.sub_season is sub_season),
                 default=0,
             )
             + 1
@@ -180,6 +182,7 @@ class Manifest:
                 'video_hash': entry.video_hash,
                 'sub_season': entry.sub_season.value,
                 'scope': entry.scope.value,
+                'batch': entry.batch,
                 'order': entry.order,
             }
             for entry in self._entries
@@ -201,18 +204,24 @@ class Manifest:
         entries: list[ManifestEntry] = []
         seen_ids: set[str] = set()
         seen_hashes: set[str] = set()
-        seen_orders: set[tuple[Scope, SubSeason, int]] = set()
+        seen_positions: set[tuple[SubSeason, Scope, int, int]] = set()
 
         for raw_entry in data:
             if not isinstance(raw_entry, dict):
                 raise ValueError('manifest clip entry must be an object')
-            if set(raw_entry) != {'id', 'video_hash', 'sub_season', 'scope', 'order'}:
+            if set(raw_entry) != {'id', 'video_hash', 'sub_season', 'scope', 'batch', 'order'}:
                 raise ValueError('manifest clip entry has unexpected fields')
 
             clip_id = _parse_uuid7(_expect_str(raw_entry['id'], field='id'), field='id')
             video_hash = _parse_sha256_hex(_expect_str(raw_entry['video_hash'], field='video_hash'))
             sub_season = _parse_sub_season(raw_entry['sub_season'])
             scope = _parse_enum(raw_entry['scope'], Scope, field='scope')
+
+            batch = raw_entry['batch']
+            if isinstance(batch, bool) or not isinstance(batch, int):
+                raise ValueError('manifest `batch` must be an integer')
+            if batch < 1:
+                raise ValueError('manifest `batch` must be >= 1')
 
             order = raw_entry['order']
             if isinstance(order, bool) or not isinstance(order, int):
@@ -225,22 +234,23 @@ class Manifest:
             if video_hash in seen_hashes:
                 raise ValueError(f'duplicate manifest video hash: {video_hash}')
 
-            order_key = (scope, sub_season, order)
-            if order_key in seen_orders:
+            position_key = (sub_season, scope, batch, order)
+            if position_key in seen_positions:
                 raise ValueError(
-                    f'duplicate manifest order for scope={scope.value} '
-                    f'sub_season={_format_sub_season(sub_season)} order={order}'
+                    f'duplicate manifest position for sub_season={_format_sub_season(sub_season)} '
+                    f'scope={scope.value} batch={batch} order={order}'
                 )
 
             seen_ids.add(clip_id)
             seen_hashes.add(video_hash)
-            seen_orders.add(order_key)
+            seen_positions.add(position_key)
             entries.append(
                 ManifestEntry(
                     id=clip_id,
                     video_hash=video_hash,
                     sub_season=sub_season,
                     scope=scope,
+                    batch=batch,
                     order=order,
                 )
             )
@@ -307,7 +317,10 @@ class ClipStore:
     """Domain-specific wrapper over `S3Client` for grouped clip storage.
 
     Clips are organized into `ClipGroup` objects, with sub-groups represented
-    by `ClipSubGroup`.
+    by `ClipSubGroup`. Ordering within a sub-group is hierarchical: each
+    `store()` call creates one logical batch, and clips inside that batch
+    keep their dense 1-based order. Batch numbers only define relative
+    ordering; they do not need to be contiguous.
 
     Deduplication is enforced only within a single clip group. Newly stored
     objects always receive a fresh UUIDv7 hex `id`, whose embedded timestamp
@@ -332,7 +345,13 @@ class ClipStore:
         clip_group: ClipGroup,
         clip_sub_group: ClipSubGroup,
     ) -> StoreResult:
-        """Store clips in a clip group with clip-group-local deduplication.
+        """Store one logical clip batch with clip-group-local deduplication.
+
+        One `store()` call maps to exactly one batch within the target
+        `ClipSubGroup`. Accepted clips keep their input order and receive
+        dense `order` values starting at `1`. If every clip in the call is a
+        duplicate, the method returns without creating a new batch. Callers
+        must not mix clips from multiple logical batches in a single call.
 
         The operation is atomic at the store-call level: if persistence fails
         after any clip uploads succeed, all clip objects uploaded during this
@@ -355,12 +374,7 @@ class ClipStore:
         seen_hashes: set[str] = set()
         seen_ids: set[str] = set()
         duplicate_count = 0
-        next_order = manifest.next_order(
-            scope=clip_sub_group.scope,
-            sub_season=clip_sub_group.sub_season,
-        )
-
-        new_entries: list[tuple[ManifestEntry, Clip]] = []
+        accepted_clips: list[tuple[str, str, Clip]] = []
         uploaded_keys: list[Key] = []
         for clip in clips:
             stored_clip_id = self._parse_stored_clip_id(clip.filename)
@@ -375,21 +389,29 @@ class ClipStore:
                 continue
 
             clip_id = self._new_clip_id(manifest=manifest, seen_ids=seen_ids)
+            accepted_clips.append((clip_id, video_hash, clip))
+            seen_ids.add(clip_id)
+            seen_hashes.add(video_hash)
+
+        if not accepted_clips:
+            return StoreResult(stored_count=0, duplicate_count=duplicate_count)
+
+        batch = manifest.next_batch(
+            sub_season=clip_sub_group.sub_season,
+            scope=clip_sub_group.scope,
+        )
+        new_entries: list[tuple[ManifestEntry, Clip]] = []
+        for order, (clip_id, video_hash, clip) in enumerate(accepted_clips, start=1):
             entry = ManifestEntry(
                 id=clip_id,
                 video_hash=video_hash,
                 sub_season=clip_sub_group.sub_season,
                 scope=clip_sub_group.scope,
-                order=next_order,
+                batch=batch,
+                order=order,
             )
             manifest.append(entry)
             new_entries.append((entry, clip))
-            seen_ids.add(entry.id)
-            seen_hashes.add(video_hash)
-            next_order += 1
-
-        if not new_entries:
-            return StoreResult(stored_count=0, duplicate_count=duplicate_count)
 
         manifest_key = self._manifest_key(clip_group_prefix)
         manifest_payload = json.dumps(manifest.to_list(), separators=(',', ':')).encode('utf-8')
@@ -424,18 +446,17 @@ class ClipStore:
         *,
         clip_group: ClipGroup,
         clip_sub_group: ClipSubGroup,
-        batch_size: int = 10,
     ) -> AsyncIterator[list[Clip]]:
-        """Fetch clips for a clip sub-group in strict manifest order.
+        """Fetch clips for a clip sub-group in preserved batch order.
+
+        The iterator yields one list per stored batch. Batches are ordered by
+        increasing `batch`, and clips inside each batch are ordered by
+        increasing `order`.
 
         Raises:
-            ValueError: If `batch_size` is less than 1.
             ClipGroupNotFoundError: If the requested logical clip group has no matching clips.
             ManifestCorruptedError: If the clip-group manifest exists but is malformed.
         """
-        if batch_size < 1:
-            raise ValueError('`batch_size` must be >= 1')
-
         clip_group_prefix = self._clip_group_prefix(
             year=clip_group.year,
             season=clip_group.season,
@@ -458,7 +479,7 @@ class ClipStore:
                 for entry in manifest
                 if entry.scope is clip_sub_group.scope and entry.sub_season is clip_sub_group.sub_season
             ),
-            key=lambda entry: entry.order,
+            key=lambda entry: (entry.batch, entry.order),
         )
         if not matching_entries:
             raise ClipGroupNotFoundError(
@@ -469,17 +490,15 @@ class ClipStore:
                 scope=clip_sub_group.scope,
             )
 
-        batch: list[Clip] = []
-        for entry in matching_entries:
-            clip_key = self._clip_key(clip_group_prefix, entry.id)
-            clip_bytes = await self._s3_client.get_bytes(clip_key)
-            batch.append(Clip(filename=self._s3_key_to_filename(clip_key), bytes=clip_bytes))
-            if len(batch) == batch_size:
-                yield batch
-                batch = []
-
-        if batch:
-            yield batch
+        # `groupby()` only forms correct batch groups because entries are
+        # sorted by `(batch, order)` immediately above.
+        for _, batch_entries in itertools.groupby(matching_entries, key=lambda entry: entry.batch):
+            clip_batch: list[Clip] = []
+            for entry in batch_entries:
+                clip_key = self._clip_key(clip_group_prefix, entry.id)
+                clip_bytes = await self._s3_client.get_bytes(clip_key)
+                clip_batch.append(Clip(filename=self._s3_key_to_filename(clip_key), bytes=clip_bytes))
+            yield clip_batch
 
     async def list_groups(self) -> list[ClipGroup]:
         """List all discovered clip groups from stored S3 prefixes."""
@@ -730,8 +749,6 @@ def _parse_enum(value: object, enum_type: type[StrEnum], *, field: str) -> Any:
 
 
 def _parse_sub_season(value: object) -> SubSeason:
-    if value is None:
-        return SubSeason.NONE
     return _parse_enum(value, SubSeason, field='sub_season')
 
 
