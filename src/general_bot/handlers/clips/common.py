@@ -10,8 +10,8 @@ from aiogram.utils.formatting import Bold, Text
 
 from general_bot.services.clip_store import Scope, Season, StoreResult, SubSeason, Universe
 
-FLOW_FETCH = 'fetch'
-FLOW_FETCH_RAW = 'fetch_raw'
+FLOW_GET = 'get'
+FLOW_PULL = 'pull'
 FLOW_RECONCILE = 'reconcile'
 FLOW_STORE = 'store'
 BACK_CALLBACK_VALUE = 'back'
@@ -36,7 +36,7 @@ class MenuStep(StrEnum):
     SCOPE = auto()
 
 
-class FetchClipFlow(StatesGroup):
+class RetrieveClipFlow(StatesGroup):
     year = State()
     season = State()
     universe = State()
@@ -57,12 +57,12 @@ class ReconcileClipFlow(StatesGroup):
     scope = State()
 
 
-FETCH_STATE_BY_STEP = {
-    MenuStep.YEAR: FetchClipFlow.year,
-    MenuStep.SEASON: FetchClipFlow.season,
-    MenuStep.UNIVERSE: FetchClipFlow.universe,
-    MenuStep.SUB_SEASON: FetchClipFlow.sub_season,
-    MenuStep.SCOPE: FetchClipFlow.scope,
+RETRIEVE_STATE_BY_STEP = {
+    MenuStep.YEAR: RetrieveClipFlow.year,
+    MenuStep.SEASON: RetrieveClipFlow.season,
+    MenuStep.UNIVERSE: RetrieveClipFlow.universe,
+    MenuStep.SUB_SEASON: RetrieveClipFlow.sub_season,
+    MenuStep.SCOPE: RetrieveClipFlow.scope,
 }
 STORE_STATE_BY_STEP = {
     MenuStep.YEAR: StoreClipFlow.year,

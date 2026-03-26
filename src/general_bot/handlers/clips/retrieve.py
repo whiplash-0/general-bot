@@ -10,9 +10,9 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 
 from general_bot.handlers.clips.common import (
     ALL_SCOPES_CALLBACK_VALUE,
-    FETCH_STATE_BY_STEP,
-    FLOW_FETCH,
-    FLOW_FETCH_RAW,
+    FLOW_GET,
+    FLOW_PULL,
+    RETRIEVE_STATE_BY_STEP,
     MenuAction,
     MenuStep,
     callback_message,
@@ -67,38 +67,38 @@ from general_bot.types import ChatId
 router = Router()
 
 
-class FetchEntryAction(StrEnum):
-    FETCH = auto()
-    FETCH_RAW = auto()
+class RetrieveEntryAction(StrEnum):
+    GET = auto()
+    PULL = auto()
     CANCEL = auto()
 
 
-class FetchEntryCallbackData(CallbackData, prefix='clip_fetch_entry'):
-    action: FetchEntryAction
+class RetrieveEntryCallbackData(CallbackData, prefix='clip_retrieve_entry'):
+    action: RetrieveEntryAction
 
 
-class FetchCallbackData(CallbackData, prefix='clip_fetch'):
+class RetrieveCallbackData(CallbackData, prefix='clip_retrieve'):
     action: MenuAction
     step: MenuStep
     value: str
 
 
-def _pack_fetch_menu_callback(action: MenuAction, step: MenuStep, value: str) -> str:
-    return FetchCallbackData(action=action, step=step, value=value).pack()
+def _pack_retrieve_menu_callback(action: MenuAction, step: MenuStep, value: str) -> str:
+    return RetrieveCallbackData(action=action, step=step, value=value).pack()
 
 
-_FETCH_FLOW = FlowMenuDefinition(
-    mode=FLOW_FETCH,
-    flow_label='Fetch',
-    state_by_step=FETCH_STATE_BY_STEP,
-    pack_callback=_pack_fetch_menu_callback,
+_GET_FLOW = FlowMenuDefinition(
+    mode=FLOW_GET,
+    flow_label='Get',
+    state_by_step=RETRIEVE_STATE_BY_STEP,
+    pack_callback=_pack_retrieve_menu_callback,
 )
 
-_FETCH_RAW_FLOW = FlowMenuDefinition(
-    mode=FLOW_FETCH_RAW,
-    flow_label='Fetch raw',
-    state_by_step=FETCH_STATE_BY_STEP,
-    pack_callback=_pack_fetch_menu_callback,
+_PULL_FLOW = FlowMenuDefinition(
+    mode=FLOW_PULL,
+    flow_label='Pull',
+    state_by_step=RETRIEVE_STATE_BY_STEP,
+    pack_callback=_pack_retrieve_menu_callback,
 )
 
 
@@ -110,17 +110,17 @@ async def on_clips(message: Message, state: FSMContext, settings: Settings) -> N
             text='Select action:',
             message_width=settings.message_width,
         ),
-        reply_markup=_fetch_entry_reply_markup(),
+        reply_markup=_retrieve_entry_reply_markup(),
     )
 
 
 @router.callback_query(
-    FetchEntryCallbackData.filter(),
+    RetrieveEntryCallbackData.filter(),
     F.message.chat.type == ChatType.PRIVATE,
 )
-async def on_fetch_entry(
+async def on_retrieve_entry(
     callback: CallbackQuery,
-    callback_data: FetchEntryCallbackData,
+    callback_data: RetrieveEntryCallbackData,
     services: Services,
     settings: Settings,
     state: FSMContext,
@@ -131,7 +131,7 @@ async def on_fetch_entry(
         await state.clear()
         return
 
-    if callback_data.action is FetchEntryAction.CANCEL:
+    if callback_data.action is RetrieveEntryAction.CANCEL:
         await state.clear()
         await message.edit_text(
             **selected_text(selected='Cancel'),
@@ -153,7 +153,7 @@ async def on_fetch_entry(
         )
         return
 
-    await _show_fetch_year_menu(
+    await _show_retrieve_year_menu(
         message=message,
         state=state,
         settings=settings,
@@ -163,12 +163,12 @@ async def on_fetch_entry(
 
 
 @router.callback_query(
-    FetchCallbackData.filter(),
+    RetrieveCallbackData.filter(),
     F.message.chat.type == ChatType.PRIVATE,
 )
-async def on_fetch_menu(
+async def on_retrieve_menu(
     callback: CallbackQuery,
-    callback_data: FetchCallbackData,
+    callback_data: RetrieveCallbackData,
     bot: Bot,
     services: Services,
     settings: Settings,
@@ -195,7 +195,7 @@ async def on_fetch_menu(
         return
 
     if callback_data.action is MenuAction.BACK:
-        await _on_fetch_back(
+        await _on_retrieve_back(
             message=message,
             state=state,
             services=services,
@@ -205,7 +205,7 @@ async def on_fetch_menu(
         )
         return
 
-    await _on_fetch_select(
+    await _on_retrieve_select(
         message=message,
         state=state,
         services=services,
@@ -216,7 +216,7 @@ async def on_fetch_menu(
     )
 
 
-async def _on_fetch_back(
+async def _on_retrieve_back(
     *,
     message: Message,
     state: FSMContext,
@@ -229,11 +229,11 @@ async def _on_fetch_back(
 
     match step:
         case MenuStep.YEAR:
-            await _show_fetch_entry_menu(message=message, state=state, settings=settings)
+            await _show_retrieve_entry_menu(message=message, state=state, settings=settings)
 
         case MenuStep.SEASON:
             await show_or_stale(
-                show_menu=_show_fetch_year_menu,
+                show_menu=_show_retrieve_year_menu,
                 message=message,
                 state=state,
                 settings=settings,
@@ -247,7 +247,7 @@ async def _on_fetch_back(
                 await handle_stale_selection(message=message, state=state)
                 return
             await show_or_stale(
-                show_menu=_show_fetch_season_menu,
+                show_menu=_show_retrieve_season_menu,
                 message=message,
                 state=state,
                 year=year,
@@ -263,7 +263,7 @@ async def _on_fetch_back(
                 return
             year, season = selection
             await show_or_stale(
-                show_menu=_show_fetch_universe_menu,
+                show_menu=_show_retrieve_universe_menu,
                 message=message,
                 state=state,
                 year=year,
@@ -281,7 +281,7 @@ async def _on_fetch_back(
             year, season, universe = selection
             clip_group = ClipGroup(year=year, season=season, universe=universe)
 
-            sub_groups = await _fetch_sub_groups(
+            sub_groups = await _retrieve_sub_groups(
                 services=services,
                 clip_group=clip_group,
             )
@@ -291,7 +291,7 @@ async def _on_fetch_back(
 
             if available_sub_seasons(sub_groups) == [SubSeason.NONE]:
                 await show_or_stale(
-                    show_menu=_show_fetch_universe_menu,
+                    show_menu=_show_retrieve_universe_menu,
                     message=message,
                     state=state,
                     year=year,
@@ -303,7 +303,7 @@ async def _on_fetch_back(
                 return
 
             await show_or_stale(
-                show_menu=_show_fetch_sub_season_menu,
+                show_menu=_show_retrieve_sub_season_menu,
                 message=message,
                 state=state,
                 clip_group=clip_group,
@@ -314,14 +314,14 @@ async def _on_fetch_back(
             )
 
 
-async def _on_fetch_select(
+async def _on_retrieve_select(
     *,
     message: Message,
     state: FSMContext,
     services: Services,
     settings: Settings,
     bot: Bot,
-    callback_data: FetchCallbackData,
+    callback_data: RetrieveCallbackData,
     flow: FlowMenuDefinition,
 ) -> None:
     data = await state.get_data()
@@ -333,7 +333,7 @@ async def _on_fetch_select(
                 await handle_stale_selection(message=message, state=state)
                 return
             await show_or_stale(
-                show_menu=_show_fetch_season_menu,
+                show_menu=_show_retrieve_season_menu,
                 message=message,
                 state=state,
                 year=year,
@@ -349,7 +349,7 @@ async def _on_fetch_select(
                 await handle_stale_selection(message=message, state=state)
                 return
             await show_or_stale(
-                show_menu=_show_fetch_universe_menu,
+                show_menu=_show_retrieve_universe_menu,
                 message=message,
                 state=state,
                 year=year,
@@ -368,7 +368,7 @@ async def _on_fetch_select(
             year, season = selection
             clip_group = ClipGroup(year=year, season=season, universe=universe)
             await show_or_stale(
-                show_menu=_show_fetch_sub_season_menu,
+                show_menu=_show_retrieve_sub_season_menu,
                 message=message,
                 state=state,
                 clip_group=clip_group,
@@ -386,7 +386,7 @@ async def _on_fetch_select(
             year, season, universe = selection
             clip_group = ClipGroup(year=year, season=season, universe=universe)
             await show_or_stale(
-                show_menu=_show_fetch_scope_menu,
+                show_menu=_show_retrieve_scope_menu,
                 message=message,
                 state=state,
                 clip_group=clip_group,
@@ -404,7 +404,7 @@ async def _on_fetch_select(
             year, season, universe, sub_season = selection
             clip_group = ClipGroup(year=year, season=season, universe=universe)
 
-            sub_groups = await _fetch_sub_groups(
+            sub_groups = await _retrieve_sub_groups(
                 services=services,
                 clip_group=clip_group,
             )
@@ -446,7 +446,7 @@ async def _on_fetch_select(
                 reply_markup=None,
             )
             try:
-                await _send_fetch_scopes(
+                await _send_retrieve_scopes(
                     bot=bot,
                     chat_id=message.chat.id,
                     services=services,
@@ -462,12 +462,12 @@ async def _on_fetch_select(
             await state.clear()
 
 
-async def _show_fetch_year_menu(
+async def _show_retrieve_year_menu(
     *,
     message: Message,
     state: FSMContext,
     settings: Settings,
-    flow: FlowMenuDefinition = _FETCH_FLOW,
+    flow: FlowMenuDefinition = _GET_FLOW,
     services: Services | None = None,
     groups: list[ClipGroup] | None = None,
 ) -> bool:
@@ -496,14 +496,14 @@ async def _show_fetch_year_menu(
     return True
 
 
-async def _show_fetch_season_menu(
+async def _show_retrieve_season_menu(
     *,
     message: Message,
     state: FSMContext,
     year: int,
     services: Services,
     settings: Settings,
-    flow: FlowMenuDefinition = _FETCH_FLOW,
+    flow: FlowMenuDefinition = _GET_FLOW,
 ) -> bool:
     groups = await services.clip_store.list_groups()
     available_seasons = available_group_seasons(groups, year=year)
@@ -528,7 +528,7 @@ async def _show_fetch_season_menu(
     return True
 
 
-async def _show_fetch_universe_menu(
+async def _show_retrieve_universe_menu(
     *,
     message: Message,
     state: FSMContext,
@@ -536,7 +536,7 @@ async def _show_fetch_universe_menu(
     season: Season,
     services: Services,
     settings: Settings,
-    flow: FlowMenuDefinition = _FETCH_FLOW,
+    flow: FlowMenuDefinition = _GET_FLOW,
 ) -> bool:
     groups = await services.clip_store.list_groups()
     available_universes = available_group_universes(groups, year=year, season=season)
@@ -560,18 +560,18 @@ async def _show_fetch_universe_menu(
     return True
 
 
-async def _show_fetch_sub_season_menu(
+async def _show_retrieve_sub_season_menu(
     *,
     message: Message,
     state: FSMContext,
     clip_group: ClipGroup,
     services: Services,
     settings: Settings,
-    flow: FlowMenuDefinition = _FETCH_FLOW,
+    flow: FlowMenuDefinition = _GET_FLOW,
     sub_groups: list[ClipSubGroup] | None = None,
 ) -> bool:
     if sub_groups is None:
-        sub_groups = await _fetch_sub_groups(
+        sub_groups = await _retrieve_sub_groups(
             services=services,
             clip_group=clip_group,
         )
@@ -580,7 +580,7 @@ async def _show_fetch_sub_season_menu(
 
     sub_seasons = available_sub_seasons(sub_groups)
     if sub_seasons == [SubSeason.NONE]:
-        return await _show_fetch_scope_menu(
+        return await _show_retrieve_scope_menu(
             message=message,
             state=state,
             clip_group=clip_group,
@@ -608,7 +608,7 @@ async def _show_fetch_sub_season_menu(
     return True
 
 
-async def _show_fetch_scope_menu(
+async def _show_retrieve_scope_menu(
     *,
     message: Message,
     state: FSMContext,
@@ -616,11 +616,11 @@ async def _show_fetch_scope_menu(
     sub_season: SubSeason,
     services: Services,
     settings: Settings,
-    flow: FlowMenuDefinition = _FETCH_FLOW,
+    flow: FlowMenuDefinition = _GET_FLOW,
     sub_groups: list[ClipSubGroup] | None = None,
 ) -> bool:
     if sub_groups is None:
-        sub_groups = await _fetch_sub_groups(
+        sub_groups = await _retrieve_sub_groups(
             services=services,
             clip_group=clip_group,
         )
@@ -652,7 +652,7 @@ async def _show_fetch_scope_menu(
     return True
 
 
-async def _send_fetch_scopes(
+async def _send_retrieve_scopes(
     *,
     bot: Bot,
     chat_id: ChatId,
@@ -732,7 +732,7 @@ async def _normalize_clip_batch(
     return normalized_clips
 
 
-async def _fetch_sub_groups(
+async def _retrieve_sub_groups(
     *,
     services: Services,
     clip_group: ClipGroup,
@@ -743,53 +743,53 @@ async def _fetch_sub_groups(
         return None
 
 
-def _fetch_entry_reply_markup():
+def _retrieve_entry_reply_markup():
     return stacked_keyboard(
         buttons=[
             InlineKeyboardButton(
-                text='Fetch',
-                callback_data=FetchEntryCallbackData(action=FetchEntryAction.FETCH).pack(),
+                text='Get',
+                callback_data=RetrieveEntryCallbackData(action=RetrieveEntryAction.GET).pack(),
             ),
             InlineKeyboardButton(
-                text='Fetch raw',
-                callback_data=FetchEntryCallbackData(action=FetchEntryAction.FETCH_RAW).pack(),
+                text='Pull',
+                callback_data=RetrieveEntryCallbackData(action=RetrieveEntryAction.PULL).pack(),
             ),
             InlineKeyboardButton(
                 text='Cancel',
-                callback_data=FetchEntryCallbackData(action=FetchEntryAction.CANCEL).pack(),
+                callback_data=RetrieveEntryCallbackData(action=RetrieveEntryAction.CANCEL).pack(),
             ),
         ]
     )
 
 
-async def _show_fetch_entry_menu(*, message: Message, state: FSMContext, settings: Settings) -> None:
+async def _show_retrieve_entry_menu(*, message: Message, state: FSMContext, settings: Settings) -> None:
     await state.clear()
     await message.edit_text(
         **width_reserved_text(
             text='Select action:',
             message_width=settings.message_width,
         ),
-        reply_markup=_fetch_entry_reply_markup(),
+        reply_markup=_retrieve_entry_reply_markup(),
     )
 
 
-def _flow_for_entry_action(action: FetchEntryAction) -> FlowMenuDefinition | None:
+def _flow_for_entry_action(action: RetrieveEntryAction) -> FlowMenuDefinition | None:
     match action:
-        case FetchEntryAction.FETCH:
-            return _FETCH_FLOW
-        case FetchEntryAction.FETCH_RAW:
-            return _FETCH_RAW_FLOW
-        case FetchEntryAction.CANCEL:
+        case RetrieveEntryAction.GET:
+            return _GET_FLOW
+        case RetrieveEntryAction.PULL:
+            return _PULL_FLOW
+        case RetrieveEntryAction.CANCEL:
             return None
 
 
 def _flow_for_mode(mode: object) -> FlowMenuDefinition | None:
-    if mode == _FETCH_FLOW.mode:
-        return _FETCH_FLOW
-    if mode == _FETCH_RAW_FLOW.mode:
-        return _FETCH_RAW_FLOW
+    if mode == _GET_FLOW.mode:
+        return _GET_FLOW
+    if mode == _PULL_FLOW.mode:
+        return _PULL_FLOW
     return None
 
 
 def _normalizes_audio(flow: FlowMenuDefinition) -> bool:
-    return flow is _FETCH_FLOW
+    return flow is _GET_FLOW

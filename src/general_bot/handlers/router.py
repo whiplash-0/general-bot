@@ -6,8 +6,8 @@ from aiogram.types import CallbackQuery, ErrorEvent, KeyboardButton, Message, Re
 from loguru import logger
 
 from general_bot.handlers.clips.common import DUMMY_CALLBACK_VALUE
-from general_bot.handlers.clips.fetch import router as fetch_router
 from general_bot.handlers.clips.intake import router as intake_router
+from general_bot.handlers.clips.retrieve import router as retrieve_router
 
 router = Router()
 
@@ -38,5 +38,5 @@ async def on_start_send_menu(message: Message) -> None:
     )
 
 
-router.include_router(fetch_router)
+router.include_router(retrieve_router)
 router.include_router(intake_router)

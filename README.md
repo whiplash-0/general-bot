@@ -18,7 +18,7 @@ The runtime itself is small: `aiogram` handles Telegram updates, a compact servi
 
 - The Telegram UI is treated as a fixed spatial interface rather than a dynamic list. Inline-keyboard messages always render as exactly three text lines and three button rows.
 - Menus use deterministic placement instead of left-to-right packing. Option grids follow a top-right-first snake layout, and unavailable options become inert dummy buttons instead of collapsing the layout.
-- Store and fetch flows deliberately share the same structural layouts. The UI can differ from the domain model at render time, while storage and parsing still use domain enums as the source of truth.
+- Store and Get/Pull flows deliberately share the same structural layouts. The UI can differ from the domain model at render time, while storage and parsing still use domain enums as the source of truth.
 - Clip storage is manifest-backed rather than inferred from object listing alone. That gives strict ordering, subgroup discovery, validation, and clip-group-local deduplication by hash or existing clip id.
 - Background work is fail-fast. Detached task failures are logged, routed through a one-shot failure hook, and lead to superuser notification plus polling shutdown instead of silent degradation.
 - Tests encode these choices directly. They verify keyboard slot placement, message padding, stale-menu handling, manifest shape, deduplication behavior, and async task semantics.
@@ -28,7 +28,7 @@ The runtime itself is small: `aiogram` handles Telegram updates, a compact servi
 The project is split into small layers with narrow responsibilities.
 
 - `app` is the composition root. It loads immutable settings, configures logging, opens the Telegram bot and S3 client, installs allowlist middleware, injects the service container into the dispatcher, and wires handler or background-task failures to superuser notification and polling shutdown.
-- `handlers` own Telegram-facing behavior. `clips_store.py` manages buffered uploads, action selection, normalization, and storage menus. `clips_fetch.py` drives the fetch flow from entry menu to batched clip delivery. `clips_common.py` holds shared FSM state, menu parsing, text formatting, and fixed-layout keyboard primitives.
+- `handlers` own Telegram-facing behavior. `clips_store.py` manages buffered uploads, action selection, normalization, and storage menus. `clips_retrieve.py` drives the Get/Pull flow from entry menu to batched clip delivery. `clips_common.py` holds shared FSM state, menu parsing, text formatting, and fixed-layout keyboard primitives.
 - `services` provide the domain-facing operations used by handlers. `ClipStore` maps logical clip groups to S3 objects and manifests, `ChatMessageBuffer` batches incoming messages per chat and reconstructs media groups, and `Services` is an explicit container rather than implicit global state.
 - `infra` contains reusable plumbing. `S3Client` is a generic async wrapper over S3-compatible storage, and `tasks.py` provides a detached task supervisor plus a per-key debouncing scheduler.
 - `settings` loads configuration from `.env` with `pydantic-settings`, selects `BOT_TOKEN_DEV` when running with `--dev`, and automatically folds `SUPERUSER_IDS` into the main allowlist.
@@ -55,7 +55,7 @@ src/
     handlers/
       core.py
       clips_common.py
-      clips_fetch.py
+      clips_retrieve.py
       clips_store.py
       router.py
     services/

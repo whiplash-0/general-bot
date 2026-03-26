@@ -69,7 +69,7 @@ Validation must be:
 
 - deterministic
 - global (entire input considered)
-- consistent with Fetch logic where applicable
+- consistent with Get/Pull logic where applicable
 
 ---
 
@@ -780,7 +780,7 @@ Use it when it materially improves clarity by distinguishing:
 Examples:
 
 - `feat(handlers): add \`Reconcile\` action for stored clips`
-- `fix(handlers): keep \`Fetch raw\` selection in raw mode`
+- `fix(handlers): keep \`Pull\` selection in raw mode`
 - `refactor(handlers): route \`Store\` and \`Reconcile\` through shared intake flow`
 
 Do not convert entities to Title Case; preserve their real UI/API casing.

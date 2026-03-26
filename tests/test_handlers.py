@@ -6,36 +6,22 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 from aiogram.utils.formatting import Bold, Text
 
-import general_bot.handlers.clips.fetch as fetch_module
 import general_bot.handlers.clips.intake as intake_module
+import general_bot.handlers.clips.retrieve as retrieve_module
 from general_bot.handlers.clips.common import (
     ALL_SCOPES_CALLBACK_VALUE,
     DUMMY_BUTTON_TEXT,
-    FLOW_FETCH_RAW,
+    FLOW_PULL,
     FLOW_RECONCILE,
-    FetchClipFlow,
     MenuAction,
     MenuStep,
     ReconcileClipFlow,
+    RetrieveClipFlow,
     StoreClipFlow,
     create_padding_line,
     format_store_summary,
     selected_text,
     selection_labels,
-)
-from general_bot.handlers.clips.fetch import (
-    FetchCallbackData,
-    FetchEntryAction,
-    FetchEntryCallbackData,
-    _send_fetch_scopes,
-    _send_stored_clip_batch,
-    _show_fetch_scope_menu,
-    _show_fetch_season_menu,
-    _show_fetch_sub_season_menu,
-    _show_fetch_universe_menu,
-    on_clips,
-    on_fetch_entry,
-    on_fetch_menu,
 )
 from general_bot.handlers.clips.intake import (
     IntakeAction,
@@ -50,6 +36,20 @@ from general_bot.handlers.clips.intake import (
     on_intake_action,
     on_intake_menu,
     parse_route_text,
+)
+from general_bot.handlers.clips.retrieve import (
+    RetrieveCallbackData,
+    RetrieveEntryAction,
+    RetrieveEntryCallbackData,
+    _send_retrieve_scopes,
+    _send_stored_clip_batch,
+    _show_retrieve_scope_menu,
+    _show_retrieve_season_menu,
+    _show_retrieve_sub_season_menu,
+    _show_retrieve_universe_menu,
+    on_clips,
+    on_retrieve_entry,
+    on_retrieve_menu,
 )
 from general_bot.handlers.router import on_dummy_button
 from general_bot.services.clip_store import (
@@ -127,7 +127,7 @@ class _RecordingBot:
         self.events.append(('media_group', (chat_id, [item.media.filename for item in media])))
 
 
-class _FetchClipStore:
+class _RetrieveClipStore:
     def __init__(
         self,
         batches_by_scope: dict[Scope, list[list[Clip]]],
@@ -373,7 +373,7 @@ def test_parse_route_text_accepts_case_insensitive_universe(
 
 
 @pytest.mark.asyncio
-async def test_on_clips_sends_fetch_entry_button() -> None:
+async def test_on_clips_sends_retrieve_entry_button() -> None:
     message = _fake_message(text='Clips')
     state = _FakeState()
     settings = _settings()
@@ -388,22 +388,22 @@ async def test_on_clips_sends_fetch_entry_button() -> None:
         message_width=settings.message_width,
     )
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Fetch'], ['Fetch raw'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [['Get'], ['Pull'], ['Cancel']]
     assert state.current_state is None
     assert state.clear_count == 1
 
 
 @pytest.mark.asyncio
-async def test_on_fetch_entry_edits_to_no_clips_stored_when_empty() -> None:
+async def test_on_retrieve_entry_edits_to_no_clips_stored_when_empty() -> None:
     message = _fake_message(text='Clips', message_id=10)
     callback = _fake_callback(message)
     state = _FakeState()
     services = _services(clip_store=SimpleNamespace(list_groups=AsyncMock(return_value=[])))
     settings = _settings()
 
-    await on_fetch_entry(
+    await on_retrieve_entry(
         callback,
-        FetchEntryCallbackData(action=FetchEntryAction.FETCH),
+        RetrieveEntryCallbackData(action=RetrieveEntryAction.GET),
         services,
         settings,
         state,
@@ -416,15 +416,15 @@ async def test_on_fetch_entry_edits_to_no_clips_stored_when_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_fetch_entry_cancel_removes_buttons_and_shows_selected_text() -> None:
+async def test_on_retrieve_entry_cancel_removes_buttons_and_shows_selected_text() -> None:
     message = _fake_message(text='Select action:', message_id=12)
     callback = _fake_callback(message)
     state = _FakeState()
     services = _services(clip_store=SimpleNamespace(list_groups=AsyncMock()))
 
-    await on_fetch_entry(
+    await on_retrieve_entry(
         callback,
-        FetchEntryCallbackData(action=FetchEntryAction.CANCEL),
+        RetrieveEntryCallbackData(action=RetrieveEntryAction.CANCEL),
         services,
         _settings(),
         state,
@@ -1343,12 +1343,12 @@ def test_store_year_options_returns_ascending_range() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_back_from_season_keeps_year_slots_and_top_right_priority() -> None:
+async def test_retrieve_back_from_season_keeps_year_slots_and_top_right_priority() -> None:
     message = _fake_message(message_id=11)
     callback = _fake_callback(message)
     state = _FakeState()
-    await state.set_state(FetchClipFlow.season)
-    await state.update_data(mode='fetch', menu_message_id=11, year=2025)
+    await state.set_state(RetrieveClipFlow.season)
+    await state.update_data(mode='get', menu_message_id=11, year=2025)
     services = _services(
         clip_store=SimpleNamespace(
             list_groups=AsyncMock(
@@ -1360,9 +1360,9 @@ async def test_fetch_back_from_season_keeps_year_slots_and_top_right_priority() 
         )
     )
 
-    await on_fetch_menu(
+    await on_retrieve_menu(
         callback,
-        FetchCallbackData(action=MenuAction.BACK, step=MenuStep.SEASON, value='back'),
+        RetrieveCallbackData(action=MenuAction.BACK, step=MenuStep.SEASON, value='back'),
         AsyncMock(),
         services,
         _settings(),
@@ -1372,7 +1372,7 @@ async def test_fetch_back_from_season_keeps_year_slots_and_top_right_priority() 
     message.edit_text.assert_awaited_once()
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
-        _selected_kwargs('Fetch', prompt='Select year:', message_width=35),
+        _selected_kwargs('Get', prompt='Select year:', message_width=35),
     )
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
@@ -1381,11 +1381,11 @@ async def test_fetch_back_from_season_keeps_year_slots_and_top_right_priority() 
         [DUMMY_BUTTON_TEXT, '2024', '2025'],
         ['Back'],
     ]
-    assert state.current_state == FetchClipFlow.year.state
+    assert state.current_state == RetrieveClipFlow.year.state
 
 
 @pytest.mark.asyncio
-async def test_on_fetch_entry_opens_year_menu_with_fetch_selected() -> None:
+async def test_on_retrieve_entry_opens_year_menu_with_get_selected() -> None:
     message = _fake_message(text='Select action:', message_id=111)
     callback = _fake_callback(message)
     state = _FakeState()
@@ -1400,9 +1400,9 @@ async def test_on_fetch_entry_opens_year_menu_with_fetch_selected() -> None:
         )
     )
 
-    await on_fetch_entry(
+    await on_retrieve_entry(
         callback,
-        FetchEntryCallbackData(action=FetchEntryAction.FETCH),
+        RetrieveEntryCallbackData(action=RetrieveEntryAction.GET),
         services,
         _settings(),
         state,
@@ -1411,7 +1411,7 @@ async def test_on_fetch_entry_opens_year_menu_with_fetch_selected() -> None:
     callback.answer.assert_awaited_once()
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
-        _selected_kwargs('Fetch', prompt='Select year:', message_width=35),
+        _selected_kwargs('Get', prompt='Select year:', message_width=35),
     )
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
@@ -1420,11 +1420,11 @@ async def test_on_fetch_entry_opens_year_menu_with_fetch_selected() -> None:
         [DUMMY_BUTTON_TEXT, '2024', '2025'],
         ['Back'],
     ]
-    assert state.current_state == FetchClipFlow.year.state
+    assert state.current_state == RetrieveClipFlow.year.state
 
 
 @pytest.mark.asyncio
-async def test_on_fetch_entry_opens_year_menu_with_fetch_raw_selected() -> None:
+async def test_on_retrieve_entry_opens_year_menu_with_pull_selected() -> None:
     message = _fake_message(text='Select action:', message_id=112)
     callback = _fake_callback(message)
     state = _FakeState()
@@ -1439,9 +1439,9 @@ async def test_on_fetch_entry_opens_year_menu_with_fetch_raw_selected() -> None:
         )
     )
 
-    await on_fetch_entry(
+    await on_retrieve_entry(
         callback,
-        FetchEntryCallbackData(action=FetchEntryAction.FETCH_RAW),
+        RetrieveEntryCallbackData(action=RetrieveEntryAction.PULL),
         services,
         _settings(),
         state,
@@ -1449,20 +1449,20 @@ async def test_on_fetch_entry_opens_year_menu_with_fetch_raw_selected() -> None:
 
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
-        _selected_kwargs('Fetch raw', prompt='Select year:', message_width=35),
+        _selected_kwargs('Pull', prompt='Select year:', message_width=35),
     )
-    assert state.current_state == FetchClipFlow.year.state
+    assert state.current_state == RetrieveClipFlow.year.state
 
 
 @pytest.mark.asyncio
-async def test_missing_fetch_state_is_treated_as_stale_selection() -> None:
+async def test_missing_retrieve_state_is_treated_as_stale_selection() -> None:
     message = _fake_message(message_id=20)
     callback = _fake_callback(message)
     state = _FakeState()
 
-    await on_fetch_menu(
+    await on_retrieve_menu(
         callback,
-        FetchCallbackData(action=MenuAction.SELECT, step=MenuStep.YEAR, value='2025'),
+        RetrieveCallbackData(action=MenuAction.SELECT, step=MenuStep.YEAR, value='2025'),
         AsyncMock(),
         _services(clip_store=SimpleNamespace()),
         _settings(),
@@ -1564,12 +1564,12 @@ async def test_store_sub_season_menu_uses_fixed_snake_layout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None:
+async def test_retrieve_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None:
     message = _fake_message(message_id=73)
     state = _FakeState()
     services = _services(clip_store=SimpleNamespace())
 
-    await _show_fetch_scope_menu(
+    await _show_retrieve_scope_menu(
         message=message,
         state=state,
         clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
@@ -1588,7 +1588,7 @@ async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None
 
     message_single = _fake_message(message_id=74)
     state_single = _FakeState()
-    await _show_fetch_scope_menu(
+    await _show_retrieve_scope_menu(
         message=message_single,
         state=state_single,
         clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
@@ -1610,13 +1610,13 @@ async def test_fetch_scope_menu_uses_fixed_scope_grid_with_dummy_slots() -> None
 
 
 @pytest.mark.asyncio
-async def test_fetch_raw_scope_all_with_one_scope_sends_single_scope_normally() -> None:
+async def test_pull_scope_all_with_one_scope_sends_single_scope_normally() -> None:
     message = _fake_message(chat_id=9, message_id=741)
     callback = _fake_callback(message)
     state = _FakeState()
-    await state.set_state(FetchClipFlow.scope)
+    await state.set_state(RetrieveClipFlow.scope)
     await state.update_data(
-        mode=FLOW_FETCH_RAW,
+        mode=FLOW_PULL,
         menu_message_id=741,
         year=2024,
         season=Season.S1,
@@ -1624,15 +1624,15 @@ async def test_fetch_raw_scope_all_with_one_scope_sends_single_scope_normally() 
         sub_season=SubSeason.NONE,
     )
     bot = _RecordingBot()
-    clip_store = _FetchClipStore(
+    clip_store = _RetrieveClipStore(
         {Scope.COLLECTION: [[Clip(filename='one.mp4', bytes=b'1')]]},
         sub_groups=[ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.COLLECTION)],
     )
     services = _services(clip_store=clip_store)
 
-    await on_fetch_menu(
+    await on_retrieve_menu(
         callback,
-        FetchCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=ALL_SCOPES_CALLBACK_VALUE),
+        RetrieveCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=ALL_SCOPES_CALLBACK_VALUE),
         bot,
         services,
         _settings(),
@@ -1642,7 +1642,7 @@ async def test_fetch_raw_scope_all_with_one_scope_sends_single_scope_normally() 
     callback.answer.assert_awaited_once()
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
-        _selected_kwargs('Fetch raw', '2024', '1', 'West', 'All'),
+        _selected_kwargs('Pull', '2024', '1', 'West', 'All'),
     )
     assert clip_store.calls == [
         (
@@ -1658,13 +1658,13 @@ async def test_fetch_raw_scope_all_with_one_scope_sends_single_scope_normally() 
 
 
 @pytest.mark.asyncio
-async def test_fetch_scope_all_normalizes_before_sending(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_scope_all_normalizes_before_sending(monkeypatch: pytest.MonkeyPatch) -> None:
     message = _fake_message(chat_id=9, message_id=742)
     callback = _fake_callback(message)
     state = _FakeState()
-    await state.set_state(FetchClipFlow.scope)
+    await state.set_state(RetrieveClipFlow.scope)
     await state.update_data(
-        mode='fetch',
+        mode='get',
         menu_message_id=742,
         year=2024,
         season=Season.S1,
@@ -1672,7 +1672,7 @@ async def test_fetch_scope_all_normalizes_before_sending(monkeypatch: pytest.Mon
         sub_season=SubSeason.NONE,
     )
     bot = AsyncMock()
-    clip_store = _FetchClipStore(
+    clip_store = _RetrieveClipStore(
         {Scope.COLLECTION: [[Clip(filename='one.mp4', bytes=b'one')]]},
         sub_groups=[ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.COLLECTION)],
     )
@@ -1683,11 +1683,11 @@ async def test_fetch_scope_all_normalizes_before_sending(monkeypatch: pytest.Mon
         assert bitrate == 128
         return b'normalized:' + video_bytes
 
-    monkeypatch.setattr(fetch_module, 'normalize_audio_loudness', _fake_normalize)
+    monkeypatch.setattr(retrieve_module, 'normalize_audio_loudness', _fake_normalize)
 
-    await on_fetch_menu(
+    await on_retrieve_menu(
         callback,
-        FetchCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=ALL_SCOPES_CALLBACK_VALUE),
+        RetrieveCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=ALL_SCOPES_CALLBACK_VALUE),
         bot,
         services,
         _settings(),
@@ -1696,7 +1696,7 @@ async def test_fetch_scope_all_normalizes_before_sending(monkeypatch: pytest.Mon
 
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
-        _selected_kwargs('Fetch', '2024', '1', 'West', 'All'),
+        _selected_kwargs('Get', '2024', '1', 'West', 'All'),
     )
     assert bot.send_video.await_args.kwargs['video'].filename == 'one.mp4'
     assert bot.send_video.await_args.kwargs['video'].data == b'normalized:one'
@@ -1705,12 +1705,12 @@ async def test_fetch_scope_all_normalizes_before_sending(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> None:
+async def test_retrieve_sub_season_menu_skips_only_when_none_is_only_option() -> None:
     services = _services(clip_store=SimpleNamespace())
 
     message_none_only = _fake_message(message_id=75)
     state_none_only = _FakeState()
-    await _show_fetch_sub_season_menu(
+    await _show_retrieve_sub_season_menu(
         message=message_none_only,
         state=state_none_only,
         clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
@@ -1719,7 +1719,7 @@ async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> No
         sub_groups=[ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.COLLECTION)],
     )
 
-    assert state_none_only.current_state == FetchClipFlow.scope.state
+    assert state_none_only.current_state == RetrieveClipFlow.scope.state
     reply_markup_none_only = message_none_only.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup_none_only)
     assert _keyboard_rows(reply_markup_none_only) == [
@@ -1730,7 +1730,7 @@ async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> No
 
     message_with_extra = _fake_message(message_id=76)
     state_with_extra = _FakeState()
-    await _show_fetch_sub_season_menu(
+    await _show_retrieve_sub_season_menu(
         message=message_with_extra,
         state=state_with_extra,
         clip_group=ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
@@ -1742,7 +1742,7 @@ async def test_fetch_sub_season_menu_skips_only_when_none_is_only_option() -> No
         ],
     )
 
-    assert state_with_extra.current_state == FetchClipFlow.sub_season.state
+    assert state_with_extra.current_state == RetrieveClipFlow.sub_season.state
     reply_markup_with_extra = message_with_extra.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup_with_extra)
     assert _keyboard_rows(reply_markup_with_extra) == [
@@ -1773,7 +1773,7 @@ async def test_store_scope_menu_uses_fixed_scope_grid_with_dummy_all_slot() -> N
 
 
 @pytest.mark.asyncio
-async def test_fetch_season_menu_uses_store_slot_universe_with_dummy_substitution() -> None:
+async def test_retrieve_season_menu_uses_store_slot_universe_with_dummy_substitution() -> None:
     message = _fake_message(message_id=78)
     state = _FakeState()
     settings = _settings(message_width=21)
@@ -1788,7 +1788,7 @@ async def test_fetch_season_menu_uses_store_slot_universe_with_dummy_substitutio
         )
     )
 
-    await _show_fetch_season_menu(
+    await _show_retrieve_season_menu(
         message=message,
         state=state,
         year=2024,
@@ -1796,7 +1796,7 @@ async def test_fetch_season_menu_uses_store_slot_universe_with_dummy_substitutio
         settings=settings,
     )
 
-    expected = _selected_kwargs('Fetch', '2024', prompt='Select season:', message_width=21)
+    expected = _selected_kwargs('Get', '2024', prompt='Select season:', message_width=21)
     _assert_format_kwargs(message.edit_text.await_args.kwargs, expected)
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
@@ -1808,7 +1808,7 @@ async def test_fetch_season_menu_uses_store_slot_universe_with_dummy_substitutio
 
 
 @pytest.mark.asyncio
-async def test_fetch_season_menu_limits_current_year_to_store_boundary_and_uses_dummy_slots(
+async def test_retrieve_season_menu_limits_current_year_to_store_boundary_and_uses_dummy_slots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _FixedDate(date):
@@ -1816,7 +1816,7 @@ async def test_fetch_season_menu_limits_current_year_to_store_boundary_and_uses_
         def today(cls) -> '_FixedDate':
             return cls(2026, 6, 15)
 
-    monkeypatch.setattr(fetch_module, 'date', _FixedDate)
+    monkeypatch.setattr(retrieve_module, 'date', _FixedDate)
 
     message = _fake_message(message_id=80)
     state = _FakeState()
@@ -1831,7 +1831,7 @@ async def test_fetch_season_menu_limits_current_year_to_store_boundary_and_uses_
         )
     )
 
-    await _show_fetch_season_menu(
+    await _show_retrieve_season_menu(
         message=message,
         state=state,
         year=2026,
@@ -1839,7 +1839,7 @@ async def test_fetch_season_menu_limits_current_year_to_store_boundary_and_uses_
         settings=settings,
     )
 
-    expected = _selected_kwargs('Fetch', '2026', prompt='Select season:', message_width=21)
+    expected = _selected_kwargs('Get', '2026', prompt='Select season:', message_width=21)
     _assert_format_kwargs(message.edit_text.await_args.kwargs, expected)
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
@@ -1851,7 +1851,7 @@ async def test_fetch_season_menu_limits_current_year_to_store_boundary_and_uses_
 
 
 @pytest.mark.asyncio
-async def test_fetch_universe_menu_uses_store_slot_universe_with_dummy_substitution() -> None:
+async def test_retrieve_universe_menu_uses_store_slot_universe_with_dummy_substitution() -> None:
     message = _fake_message(message_id=79)
     state = _FakeState()
     settings = _settings(message_width=18)
@@ -1865,7 +1865,7 @@ async def test_fetch_universe_menu_uses_store_slot_universe_with_dummy_substitut
         )
     )
 
-    await _show_fetch_universe_menu(
+    await _show_retrieve_universe_menu(
         message=message,
         state=state,
         year=2024,
@@ -1874,7 +1874,7 @@ async def test_fetch_universe_menu_uses_store_slot_universe_with_dummy_substitut
         settings=settings,
     )
 
-    expected = _selected_kwargs('Fetch', '2024', '3', prompt='Select universe:', message_width=18)
+    expected = _selected_kwargs('Get', '2024', '3', prompt='Select universe:', message_width=18)
     _assert_format_kwargs(message.edit_text.await_args.kwargs, expected)
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
@@ -2458,10 +2458,10 @@ async def test_send_stored_clip_batch_sends_single_clip_as_video() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_fetch_scopes_sends_separator_only_between_scope_blocks_and_done() -> None:
+async def test_send_retrieve_scopes_sends_separator_only_between_scope_blocks_and_done() -> None:
     bot = _RecordingBot()
     services = _services(
-        clip_store=_FetchClipStore(
+        clip_store=_RetrieveClipStore(
             {
                 Scope.COLLECTION: [[Clip(filename='one.mp4', bytes=b'1')]],
                 Scope.EXTRA: [[Clip(filename='two.mp4', bytes=b'2')]],
@@ -2469,7 +2469,7 @@ async def test_send_fetch_scopes_sends_separator_only_between_scope_blocks_and_d
         )
     )
 
-    await _send_fetch_scopes(
+    await _send_retrieve_scopes(
         bot=bot,
         chat_id=9,
         services=services,
@@ -2499,11 +2499,11 @@ async def test_send_fetch_scopes_sends_separator_only_between_scope_blocks_and_d
 
 
 @pytest.mark.asyncio
-async def test_send_fetch_scopes_normalizes_clips_in_memory_before_send(
+async def test_send_retrieve_scopes_normalizes_clips_in_memory_before_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bot = AsyncMock()
-    clip_store = _FetchClipStore(
+    clip_store = _RetrieveClipStore(
         {
             Scope.COLLECTION: [
                 [Clip(filename='one.mp4', bytes=b'one')],
@@ -2521,9 +2521,9 @@ async def test_send_fetch_scopes_normalizes_clips_in_memory_before_send(
         assert bitrate == 160
         return video_bytes.upper()
 
-    monkeypatch.setattr(fetch_module, 'normalize_audio_loudness', _fake_normalize)
+    monkeypatch.setattr(retrieve_module, 'normalize_audio_loudness', _fake_normalize)
 
-    await _send_fetch_scopes(
+    await _send_retrieve_scopes(
         bot=bot,
         chat_id=9,
         services=services,
@@ -2549,12 +2549,12 @@ async def test_send_fetch_scopes_normalizes_clips_in_memory_before_send(
 
 
 @pytest.mark.asyncio
-async def test_send_fetch_scopes_propagates_normalization_failure_without_sending(
+async def test_send_retrieve_scopes_propagates_normalization_failure_without_sending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bot = AsyncMock()
     services = _services(
-        clip_store=_FetchClipStore(
+        clip_store=_RetrieveClipStore(
             {
                 Scope.COLLECTION: [
                     [Clip(filename='one.mp4', bytes=b'one')],
@@ -2566,10 +2566,10 @@ async def test_send_fetch_scopes_propagates_normalization_failure_without_sendin
     async def _failing_normalize(video_bytes: bytes, *, loudness: float, bitrate: int) -> bytes:
         raise RuntimeError(f'boom: {video_bytes!r}')
 
-    monkeypatch.setattr(fetch_module, 'normalize_audio_loudness', _failing_normalize)
+    monkeypatch.setattr(retrieve_module, 'normalize_audio_loudness', _failing_normalize)
 
     with pytest.raises(RuntimeError, match="boom: b'one'"):
-        await _send_fetch_scopes(
+        await _send_retrieve_scopes(
             bot=bot,
             chat_id=9,
             services=services,
