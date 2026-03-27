@@ -88,6 +88,7 @@ type IntakeShowMenu = Callable[..., Awaitable[bool]]
 class IntakeAction(StrEnum):
     CANCEL = auto()
     REORDER = auto()
+    COMPACT = auto()
     RECONCILE = auto()
     ROUTE = auto()
     STORE = auto()
@@ -221,6 +222,40 @@ async def on_intake_action(
                 settings=settings,
                 total_clips=len(video_messages),
                 buffer_version=services.chat_message_buffer.version(message.chat.id),
+            )
+
+        case IntakeAction.COMPACT:
+            chat_id = message.chat.id
+            version_at_start = services.chat_message_buffer.version(chat_id)
+            video_messages = _buffered_video_messages(services.chat_message_buffer.peek_grouped(chat_id))
+            total_clips = len(video_messages)
+            if total_clips == 0:
+                await state.clear()
+                await message.edit_text('Selection is no longer available', reply_markup=None)
+                return
+            if total_clips == 1:
+                await state.clear()
+                services.chat_message_buffer.flush_grouped(chat_id)
+                await message.edit_text('Unexpected number of clips', reply_markup=None)
+                return
+
+            # `0` clips means the action menu went stale, so we keep the buffer.
+            # `1` clip is an invalid compact input, so we flush intentionally.
+            if services.chat_message_buffer.version(chat_id) != version_at_start:
+                await state.clear()
+                await message.edit_text('Selection is no longer available', reply_markup=None)
+                return
+
+            await state.clear()
+            await message.edit_text(
+                **selected_text(selected='Compact'),
+                reply_markup=None,
+            )
+            compact_messages = _buffered_video_messages(services.chat_message_buffer.flush_grouped(chat_id))
+            await _send_reordered_video_messages(
+                bot=bot,
+                chat_id=chat_id,
+                messages=compact_messages,
             )
 
         case IntakeAction.RECONCILE:
@@ -1473,6 +1508,7 @@ def _intake_action_menu_kwargs(
         'reply_markup': selection_keyboard(
             buttons=[
                 _create_intake_action_button(IntakeAction.REORDER),
+                _create_intake_action_button(IntakeAction.COMPACT),
                 _create_intake_action_button(IntakeAction.STORE),
                 _create_intake_action_button(IntakeAction.ROUTE),
                 _create_intake_action_button(IntakeAction.RECONCILE),

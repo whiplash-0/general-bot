@@ -526,7 +526,7 @@ async def test_clip_action_selection_includes_store_button() -> None:
     )
     reply_markup = message.answer.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Reconcile', 'Reorder'], ['Route', 'Store'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [['Route', 'Reorder'], ['Reconcile', 'Store', 'Compact'], ['Cancel']]
 
 
 @pytest.mark.asyncio
@@ -817,7 +817,7 @@ async def test_reorder_back_from_empty_state_returns_to_intake_action_menu() -> 
 
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Reconcile', 'Reorder'], ['Route', 'Store'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [['Route', 'Reorder'], ['Reconcile', 'Store', 'Compact'], ['Cancel']]
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
         Text(
@@ -1020,6 +1020,191 @@ async def test_reorder_completion_flushes_only_at_completion_and_splits_large_re
         ('media_group', (77, ['f12', 'f11', 'f10', 'f9', 'f8', 'f7', 'f6', 'f5', 'f4', 'f3'])),
         ('media_group', (77, ['f2', 'f1'])),
     ]
+
+
+@pytest.mark.asyncio
+async def test_compact_action_resends_only_videos_by_file_id_in_original_order() -> None:
+    message = _fake_message(text='Select action:', chat_id=77, message_id=91)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    buffer = ChatMessageBuffer()
+    for buffered_message in [
+        _fake_message(chat_id=77, message_id=1, video=_fake_video(file_id='f1', file_name='one.mp4')),
+        _fake_message(chat_id=77, message_id=2, text='ignore me'),
+        _fake_message(chat_id=77, message_id=3, video=_fake_video(file_id='f2', file_name='two.mp4')),
+        _fake_message(chat_id=77, message_id=4, caption='caption only'),
+        _fake_message(chat_id=77, message_id=5, video=_fake_video(file_id='f3', file_name='three.mp4')),
+        _fake_message(chat_id=77, message_id=6, text='still ignored'),
+        _fake_message(chat_id=77, message_id=7, video=_fake_video(file_id='f4', file_name='four.mp4')),
+    ]:
+        buffer.append(buffered_message, chat_id=77)
+    buffer.flush_grouped = Mock(wraps=buffer.flush_grouped)
+    clip_store = SimpleNamespace(
+        compact=AsyncMock(side_effect=AssertionError('Compact must not use ClipStore.compact')),
+        derive_group=AsyncMock(side_effect=AssertionError('Compact must not use ClipStore.derive_group')),
+        list_groups=AsyncMock(side_effect=AssertionError('Compact must not use ClipStore.list_groups')),
+        list_sub_groups=AsyncMock(side_effect=AssertionError('Compact must not use ClipStore.list_sub_groups')),
+        reconcile=AsyncMock(side_effect=AssertionError('Compact must not use ClipStore.reconcile')),
+        store=AsyncMock(side_effect=AssertionError('Compact must not use ClipStore.store')),
+    )
+    services = _services(clip_store=clip_store, buffer=buffer)
+    bot = _RecordingBot()
+    bot.get_file = AsyncMock(side_effect=AssertionError('Compact must not download files'))
+    bot.download_file = AsyncMock(side_effect=AssertionError('Compact must not download files'))
+
+    await on_intake_action(
+        callback,
+        SimpleNamespace(action=IntakeAction.COMPACT),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    callback.answer.assert_awaited_once()
+    message.edit_text.assert_awaited_once_with(
+        **selected_text(selected='Compact'),
+        reply_markup=None,
+    )
+    buffer.flush_grouped.assert_called_once_with(77)
+    assert services.chat_message_buffer.peek(77) == []
+    assert state.current_state is None
+    assert state.data == {}
+    assert bot.events == [('media_group', (77, ['f1', 'f2', 'f3', 'f4']))]
+    bot.get_file.assert_not_awaited()
+    bot.download_file.assert_not_awaited()
+    clip_store.store.assert_not_awaited()
+    clip_store.compact.assert_not_awaited()
+    clip_store.derive_group.assert_not_awaited()
+    clip_store.reconcile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_compact_action_rejects_single_clip_and_flushes_buffer() -> None:
+    message = _fake_message(text='Select action:', chat_id=77, message_id=92)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    buffer = ChatMessageBuffer()
+    buffer.append(
+        _fake_message(chat_id=77, message_id=1, video=_fake_video(file_id='f1', file_name='one.mp4')),
+        chat_id=77,
+    )
+    buffer.append(_fake_message(chat_id=77, message_id=2, text='ignore me'), chat_id=77)
+    buffer.flush_grouped = Mock(wraps=buffer.flush_grouped)
+    services = _services(clip_store=SimpleNamespace(), buffer=buffer)
+    bot = _RecordingBot()
+
+    await on_intake_action(
+        callback,
+        SimpleNamespace(action=IntakeAction.COMPACT),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    buffer.flush_grouped.assert_called_once_with(77)
+    message.edit_text.assert_awaited_once_with('Unexpected number of clips', reply_markup=None)
+    assert services.chat_message_buffer.peek(77) == []
+    assert bot.events == []
+
+
+@pytest.mark.asyncio
+async def test_compact_action_treats_zero_videos_as_stale_without_flushing() -> None:
+    message = _fake_message(text='Select action:', chat_id=77, message_id=93)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    buffer = ChatMessageBuffer()
+    buffer.append(_fake_message(chat_id=77, message_id=1, text='ignore me'), chat_id=77)
+    buffer.append(_fake_message(chat_id=77, message_id=2, caption='still not a video'), chat_id=77)
+    buffer.flush_grouped = Mock(wraps=buffer.flush_grouped)
+    services = _services(clip_store=SimpleNamespace(), buffer=buffer)
+    bot = _RecordingBot()
+
+    await on_intake_action(
+        callback,
+        SimpleNamespace(action=IntakeAction.COMPACT),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    buffer.flush_grouped.assert_not_called()
+    message.edit_text.assert_awaited_once_with('Selection is no longer available', reply_markup=None)
+    assert [buffered_message.message_id for buffered_message in services.chat_message_buffer.peek(77)] == [1, 2]
+    assert bot.events == []
+
+
+@pytest.mark.asyncio
+async def test_compact_action_allows_large_clip_counts_and_splits_batches_of_ten() -> None:
+    message = _fake_message(text='Select action:', chat_id=77, message_id=94)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    buffer = ChatMessageBuffer()
+    for index in range(1, 18):
+        buffer.append(
+            _fake_message(
+                chat_id=77,
+                message_id=index,
+                video=_fake_video(file_id=f'f{index}', file_name=f'{index}.mp4'),
+            ),
+            chat_id=77,
+        )
+    buffer.flush_grouped = Mock(wraps=buffer.flush_grouped)
+    services = _services(clip_store=SimpleNamespace(), buffer=buffer)
+    bot = _RecordingBot()
+
+    await on_intake_action(
+        callback,
+        SimpleNamespace(action=IntakeAction.COMPACT),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    buffer.flush_grouped.assert_called_once_with(77)
+    assert bot.events == [
+        ('media_group', (77, ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10'])),
+        ('media_group', (77, ['f11', 'f12', 'f13', 'f14', 'f15', 'f16', 'f17'])),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_compact_action_becomes_stale_when_buffer_version_changes() -> None:
+    message = _fake_message(text='Select action:', chat_id=77, message_id=95)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    buffer = ChatMessageBuffer()
+    for index in range(1, 3):
+        buffer.append(
+            _fake_message(
+                chat_id=77,
+                message_id=index,
+                video=_fake_video(file_id=f'f{index}', file_name=f'{index}.mp4'),
+            ),
+            chat_id=77,
+        )
+    initial_version = buffer.version(77)
+    buffer.flush_grouped = Mock(wraps=buffer.flush_grouped)
+    buffer.version = Mock(side_effect=[initial_version, initial_version + 1])
+    services = _services(clip_store=SimpleNamespace(), buffer=buffer)
+    bot = _RecordingBot()
+
+    await on_intake_action(
+        callback,
+        SimpleNamespace(action=IntakeAction.COMPACT),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    buffer.flush_grouped.assert_not_called()
+    message.edit_text.assert_awaited_once_with('Selection is no longer available', reply_markup=None)
+    assert [buffered_message.message_id for buffered_message in services.chat_message_buffer.peek(77)] == [1, 2]
+    assert bot.events == []
 
 
 @pytest.mark.asyncio
@@ -1843,7 +2028,7 @@ async def test_reconcile_back_from_sub_season_returns_to_clip_action_menu() -> N
 
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Reconcile', 'Reorder'], ['Route', 'Store'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [['Route', 'Reorder'], ['Reconcile', 'Store', 'Compact'], ['Cancel']]
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
         Text(
