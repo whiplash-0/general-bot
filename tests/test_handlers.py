@@ -138,11 +138,17 @@ class _RetrieveClipStore:
         sub_groups: list[ClipSubGroup] | None = None,
     ) -> None:
         self.batches_by_scope = batches_by_scope
-        self.calls: list[tuple[ClipGroup, ClipSubGroup]] = []
+        self.calls: list[tuple[ClipGroup, ClipSubGroup, tuple[str, ...] | None]] = []
         self.sub_groups = list(sub_groups or [])
 
-    async def fetch(self, *, clip_group: ClipGroup, clip_sub_group: ClipSubGroup):
-        self.calls.append((clip_group, clip_sub_group))
+    async def fetch(
+        self,
+        *,
+        clip_group: ClipGroup,
+        clip_sub_group: ClipSubGroup,
+        clip_ids=None,
+    ):
+        self.calls.append((clip_group, clip_sub_group, None if clip_ids is None else tuple(clip_ids)))
         for batch in self.batches_by_scope[clip_sub_group.scope]:
             yield batch
 
@@ -155,6 +161,44 @@ class _NoListClipStore:
         self.store = AsyncMock(return_value=StoreResult(stored_count=0, duplicate_count=0))
         self.list_groups = AsyncMock(side_effect=AssertionError('store flow must not call list_groups'))
         self.list_sub_groups = AsyncMock(side_effect=AssertionError('store flow must not call list_sub_groups'))
+
+
+class _ProduceClipStore:
+    def __init__(
+        self,
+        *,
+        store_results: list[StoreResult],
+        fetched_batches: list[list[Clip]],
+    ) -> None:
+        self.events: list[tuple[str, object]] = []
+        self._store_results = iter(store_results)
+        self._fetched_batches = fetched_batches
+        self.fetch_calls: list[tuple[ClipGroup, ClipSubGroup, tuple[str, ...] | None]] = []
+
+    async def store(self, clips, *, clip_group: ClipGroup, clip_sub_group: ClipSubGroup) -> StoreResult:
+        self.events.append(('store', ([clip.filename for clip in clips], clip_group, clip_sub_group)))
+        return next(self._store_results)
+
+    async def compact(
+        self,
+        *,
+        clip_group: ClipGroup,
+        clip_sub_group: ClipSubGroup,
+        batch_size: int,
+    ) -> None:
+        self.events.append(('compact', (clip_group, clip_sub_group, batch_size)))
+
+    async def fetch(
+        self,
+        *,
+        clip_group: ClipGroup,
+        clip_sub_group: ClipSubGroup,
+        clip_ids=None,
+    ):
+        self.fetch_calls.append((clip_group, clip_sub_group, None if clip_ids is None else tuple(clip_ids)))
+        self.events.append(('fetch', (clip_group, clip_sub_group, None if clip_ids is None else tuple(clip_ids))))
+        for batch in self._fetched_batches:
+            yield batch
 
 
 def _services(
@@ -526,7 +570,11 @@ async def test_clip_action_selection_includes_store_button() -> None:
     )
     reply_markup = message.answer.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Route', 'Reorder'], ['Reconcile', 'Store', 'Compact'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [
+        ['Route', 'Produce', 'Reorder'],
+        ['Reconcile', 'Store', 'Compact'],
+        ['Cancel'],
+    ]
 
 
 @pytest.mark.asyncio
@@ -817,7 +865,11 @@ async def test_reorder_back_from_empty_state_returns_to_intake_action_menu() -> 
 
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Route', 'Reorder'], ['Reconcile', 'Store', 'Compact'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [
+        ['Route', 'Produce', 'Reorder'],
+        ['Reconcile', 'Store', 'Compact'],
+        ['Cancel'],
+    ]
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
         Text(
@@ -2028,7 +2080,11 @@ async def test_reconcile_back_from_sub_season_returns_to_clip_action_menu() -> N
 
     reply_markup = message.edit_text.await_args.kwargs['reply_markup']
     _assert_three_rows(reply_markup)
-    assert _keyboard_rows(reply_markup) == [['Route', 'Reorder'], ['Reconcile', 'Store', 'Compact'], ['Cancel']]
+    assert _keyboard_rows(reply_markup) == [
+        ['Route', 'Produce', 'Reorder'],
+        ['Reconcile', 'Store', 'Compact'],
+        ['Cancel'],
+    ]
     _assert_format_kwargs(
         message.edit_text.await_args.kwargs,
         Text(
@@ -2356,6 +2412,7 @@ async def test_pull_scope_all_with_one_scope_sends_single_scope_normally() -> No
         (
             ClipGroup(year=2024, season=Season.S1, universe=Universe.WEST),
             ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.COLLECTION),
+            None,
         )
     ]
     assert bot.events == [
@@ -2677,6 +2734,166 @@ async def test_store_scope_selection_aggregates_results_and_sends_exact_summary(
 
 
 @pytest.mark.asyncio
+async def test_produce_scope_selection_stores_then_fetches_only_new_subset_via_shared_normalize_send_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _fake_message(text='Select scope:', chat_id=77, message_id=60)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    await state.set_state(StoreClipFlow.scope)
+    buffer = ChatMessageBuffer()
+    buffer.append(
+        _fake_message(chat_id=77, message_id=1, video=_fake_video(file_id='f1', file_name='one.mp4')),
+        chat_id=77,
+    )
+    buffer.append(
+        _fake_message(
+            chat_id=77,
+            message_id=2,
+            video=_fake_video(file_id='f2', file_name='two.mp4'),
+            media_group_id='g1',
+        ),
+        chat_id=77,
+    )
+    buffer.append(
+        _fake_message(
+            chat_id=77,
+            message_id=3,
+            video=_fake_video(file_id='f3', file_name='three.mp4'),
+            media_group_id='g1',
+        ),
+        chat_id=77,
+    )
+    await state.update_data(
+        mode='produce',
+        menu_message_id=60,
+        year=2025,
+        season=Season.S1,
+        universe=Universe.WEST,
+        sub_season=SubSeason.NONE,
+        buffer_version=buffer.version(77),
+    )
+
+    clip_store = _ProduceClipStore(
+        store_results=[
+            StoreResult(stored_count=1, duplicate_count=0, clip_ids=('id-1',)),
+            StoreResult(stored_count=2, duplicate_count=1, clip_ids=('id-2', 'id-3')),
+        ],
+        fetched_batches=[
+            [Clip(filename='one.mp4', bytes=b'one')],
+            [Clip(filename='two.mp4', bytes=b'two'), Clip(filename='three.mp4', bytes=b'three')],
+        ],
+    )
+    services = _services(clip_store=clip_store, buffer=buffer)
+
+    bot = AsyncMock()
+    bot.get_file.side_effect = [
+        SimpleNamespace(file_path='path-1'),
+        SimpleNamespace(file_path='path-2'),
+        SimpleNamespace(file_path='path-3'),
+    ]
+    bot.download_file.side_effect = [BytesIO(b'one'), BytesIO(b'two'), BytesIO(b'three')]
+
+    async def _fake_normalize(video_bytes: bytes, *, loudness: float, bitrate: int) -> bytes:
+        assert loudness == -14
+        assert bitrate == 128
+        return b'normalized:' + video_bytes
+
+    monkeypatch.setattr(retrieve_module, 'normalize_audio_loudness', _fake_normalize)
+    shared_helper = AsyncMock(side_effect=retrieve_module._send_fetched_clip_batches)
+    monkeypatch.setattr(intake_module, '_send_fetched_clip_batches', shared_helper)
+
+    await on_intake_menu(
+        callback,
+        IntakeCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=Scope.EXTRA.value),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    _assert_format_kwargs(
+        message.edit_text.await_args.kwargs,
+        _selected_kwargs('Produce', '2025', '1', 'West', 'Extra'),
+    )
+    message.answer.assert_awaited_once_with(
+        **Text(
+            'Stored: ',
+            Bold('3'),
+            '\n',
+            'Deduplicated: ',
+            Bold('1'),
+        ).as_kwargs()
+    )
+    assert [event[0] for event in clip_store.events] == ['store', 'store', 'compact', 'fetch']
+    assert clip_store.fetch_calls == [
+        (
+            ClipGroup(year=2025, season=Season.S1, universe=Universe.WEST),
+            ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.EXTRA),
+            ('id-1', 'id-2', 'id-3'),
+        )
+    ]
+    shared_helper.assert_awaited_once()
+    assert shared_helper.await_args.kwargs['normalize_audio'] is True
+    assert bot.send_video.await_args.kwargs['video'].data == b'normalized:one'
+    sent_media = bot.send_media_group.await_args.kwargs['media']
+    assert [item.media.data for item in sent_media] == [b'normalized:two', b'normalized:three']
+    bot.send_message.assert_awaited_once_with(chat_id=77, text='Done')
+    assert state.current_state is None
+
+
+@pytest.mark.asyncio
+async def test_produce_scope_selection_with_no_new_clips_sends_summary_only() -> None:
+    message = _fake_message(text='Select scope:', chat_id=77, message_id=61)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    await state.set_state(StoreClipFlow.scope)
+    buffer = ChatMessageBuffer()
+    buffer.append(
+        _fake_message(chat_id=77, message_id=1, video=_fake_video(file_id='f1', file_name='one.mp4')),
+        chat_id=77,
+    )
+    await state.update_data(
+        mode='produce',
+        menu_message_id=61,
+        year=2025,
+        season=Season.S1,
+        universe=Universe.WEST,
+        sub_season=SubSeason.NONE,
+        buffer_version=buffer.version(77),
+    )
+
+    clip_store = _ProduceClipStore(
+        store_results=[StoreResult(stored_count=0, duplicate_count=1)],
+        fetched_batches=[[Clip(filename='unexpected.mp4', bytes=b'nope')]],
+    )
+    services = _services(clip_store=clip_store, buffer=buffer)
+    bot = AsyncMock()
+    bot.get_file.return_value = SimpleNamespace(file_path='path-1')
+    bot.download_file.return_value = BytesIO(b'one')
+
+    await on_intake_menu(
+        callback,
+        IntakeCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=Scope.COLLECTION.value),
+        bot,
+        services,
+        _settings(),
+        state,
+    )
+
+    _assert_format_kwargs(
+        message.edit_text.await_args.kwargs,
+        _selected_kwargs('Produce', '2025', '1', 'West', 'Collection'),
+    )
+    message.answer.assert_awaited_once_with(**Text('Deduplicated: ', Bold('1')).as_kwargs())
+    assert clip_store.fetch_calls == []
+    assert [event[0] for event in clip_store.events] == ['store']
+    bot.send_video.assert_not_awaited()
+    bot.send_media_group.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_store_scope_selection_preserves_missing_telegram_filename_behavior() -> None:
     message = _fake_message(text='Select scope:', chat_id=77, message_id=50)
     callback = _fake_callback(message)
@@ -2809,6 +3026,52 @@ async def test_store_scope_selection_does_not_compact_when_everything_is_duplica
     )
 
     clip_store.compact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_produce_scope_selection_becomes_stale_when_buffer_version_changes() -> None:
+    message = _fake_message(text='Select scope:', chat_id=77, message_id=62)
+    callback = _fake_callback(message)
+    state = _FakeState()
+    await state.set_state(StoreClipFlow.scope)
+
+    buffer = ChatMessageBuffer()
+    buffer.append(
+        _fake_message(chat_id=77, message_id=1, video=_fake_video(file_id='f1', file_name='one.mp4')),
+        chat_id=77,
+    )
+    await state.update_data(
+        mode='produce',
+        menu_message_id=62,
+        year=2025,
+        season=Season.S1,
+        universe=Universe.WEST,
+        sub_season=SubSeason.NONE,
+        buffer_version=buffer.version(77),
+    )
+    buffer.append(
+        _fake_message(chat_id=77, message_id=2, video=_fake_video(file_id='f2', file_name='two.mp4')),
+        chat_id=77,
+    )
+
+    clip_store = SimpleNamespace(store=AsyncMock(), compact=AsyncMock(), fetch=AsyncMock())
+    services = _services(clip_store=clip_store, buffer=buffer)
+
+    await on_intake_menu(
+        callback,
+        IntakeCallbackData(action=MenuAction.SELECT, step=MenuStep.SCOPE, value=Scope.COLLECTION.value),
+        AsyncMock(),
+        services,
+        _settings(),
+        state,
+    )
+
+    message.edit_text.assert_awaited_once_with('Selection is no longer available', reply_markup=None)
+    clip_store.store.assert_not_awaited()
+    clip_store.compact.assert_not_awaited()
+    clip_store.fetch.assert_not_awaited()
+    assert state.current_state is None
+    assert state.clear_count == 1
 
 
 @pytest.mark.asyncio
@@ -3196,10 +3459,12 @@ async def test_send_retrieve_scopes_sends_separator_only_between_scope_blocks_an
         (
             ClipGroup(year=2025, season=Season.S1, universe=Universe.WEST),
             ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.COLLECTION),
+            None,
         ),
         (
             ClipGroup(year=2025, season=Season.S1, universe=Universe.WEST),
             ClipSubGroup(sub_season=SubSeason.NONE, scope=Scope.EXTRA),
+            None,
         ),
     ]
     assert bot.events == [

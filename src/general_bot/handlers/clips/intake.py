@@ -55,6 +55,7 @@ from general_bot.handlers.clips.flow import (
     validate_menu_flow_state,
     year_option_universe,
 )
+from general_bot.handlers.clips.retrieve import _send_fetched_clip_batches, should_normalize_audio
 from general_bot.services.clip_store import (
     Clip,
     ClipGroup,
@@ -79,6 +80,7 @@ router = Router()
 _TELEGRAM_MEDIA_GROUP_LIMIT = 10
 _BUFFER_VERSION_KEY = 'buffer_version'
 _REORDER_FLOW_MODE = 'reorder'
+_PRODUCE_FLOW_MODE = 'produce'
 _REORDER_MAX_CLIPS = 16
 _REORDER_SELECTION_PROMPT = 'Select new order:'
 _REORDER_RESET_CALLBACK_VALUE = 'reset'
@@ -92,6 +94,7 @@ class IntakeAction(StrEnum):
     RECONCILE = auto()
     ROUTE = auto()
     STORE = auto()
+    PRODUCE = auto()
 
 
 class IntakeActionCallbackData(CallbackData, prefix='clip_action'):
@@ -134,6 +137,13 @@ def _pack_intake_menu_callback(action: MenuAction, step: MenuStep, value: str) -
 _STORE_FLOW = FlowMenuDefinition(
     mode=FLOW_STORE,
     flow_label='Store',
+    state_by_step=STORE_STATE_BY_STEP,
+    pack_callback=_pack_intake_menu_callback,
+)
+
+_PRODUCE_FLOW = FlowMenuDefinition(
+    mode=_PRODUCE_FLOW_MODE,
+    flow_label='Produce',
     state_by_step=STORE_STATE_BY_STEP,
     pack_callback=_pack_intake_menu_callback,
 )
@@ -338,6 +348,16 @@ async def on_intake_action(
                 buffer_version=services.chat_message_buffer.version(message.chat.id),
                 settings=settings,
                 flow=_STORE_FLOW,
+            )
+
+        case IntakeAction.PRODUCE:
+            await _show_intake_menu_or_stale(
+                show_menu=_show_store_year_menu,
+                message=message,
+                state=state,
+                buffer_version=services.chat_message_buffer.version(message.chat.id),
+                settings=settings,
+                flow=_PRODUCE_FLOW,
             )
 
         case IntakeAction.ROUTE:
@@ -793,7 +813,7 @@ async def _on_store_select(
             )
             await state.clear()
 
-            if flow is _STORE_FLOW:
+            if flow is _STORE_FLOW or flow is _PRODUCE_FLOW:
                 result = await _store_buffered_clips(
                     bot=bot,
                     chat_id=message.chat.id,
@@ -804,7 +824,7 @@ async def _on_store_select(
 
                 await message.answer(**_store_summary_kwargs(result))
 
-                if result.stored_count > 0 and scope in {Scope.EXTRA, Scope.SOURCE}:
+                if result.stored_count > 0 and _should_compact_after_store(scope):
                     try:
                         await services.clip_store.compact(
                             clip_group=clip_group,
@@ -818,6 +838,20 @@ async def _on_store_select(
                             clip_sub_group,
                         )
                         raise
+
+                if flow is _PRODUCE_FLOW and result.stored_count > 0:
+                    await _send_fetched_clip_batches(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        clip_batches=services.clip_store.fetch(
+                            clip_group=clip_group,
+                            clip_sub_group=clip_sub_group,
+                            clip_ids=result.clip_ids,
+                        ),
+                        settings=settings,
+                        normalize_audio=should_normalize_audio(settings=settings),
+                    )
+                    await bot.send_message(chat_id=message.chat.id, text='Done')
                 return
 
 
@@ -1510,6 +1544,7 @@ def _intake_action_menu_kwargs(
                 _create_intake_action_button(IntakeAction.REORDER),
                 _create_intake_action_button(IntakeAction.COMPACT),
                 _create_intake_action_button(IntakeAction.STORE),
+                _create_intake_action_button(IntakeAction.PRODUCE),
                 _create_intake_action_button(IntakeAction.ROUTE),
                 _create_intake_action_button(IntakeAction.RECONCILE),
             ],
@@ -1633,9 +1668,25 @@ def _reconcile_summary_kwargs(result: ReconcileResult) -> dict[str, Any]:
 def _selection_flow_for_mode(mode: object) -> FlowMenuDefinition | None:
     if mode == _STORE_FLOW.mode:
         return _STORE_FLOW
+    if mode == _PRODUCE_FLOW.mode:
+        return _PRODUCE_FLOW
     if mode == _RECONCILE_FLOW.mode:
         return _RECONCILE_FLOW
     return None
+
+
+def _should_compact_after_store(scope: Scope) -> bool:
+    """Return the handler-level post-store compaction policy for intake flows.
+
+    Intake decides whether to compact after storing. `Scope.COLLECTION` keeps
+    its original stored grouping, while `Scope.EXTRA` and `Scope.SOURCE`
+    compact after store. `Produce` must follow the same post-store compaction
+    policy as `Store`.
+
+    `ClipStore.fetch()` only reflects the current manifest layout; it does not
+    decide whether compaction should happen.
+    """
+    return scope in {Scope.EXTRA, Scope.SOURCE}
 
 
 def _is_intake_buffer_state_valid(

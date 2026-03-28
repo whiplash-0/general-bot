@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import date
 from enum import StrEnum, auto
 
@@ -667,16 +667,33 @@ async def _send_retrieve_scopes(
         if index > 0:
             await bot.send_message(chat_id=chat_id, text='.')
 
-        async for batch in services.clip_store.fetch(
-            clip_group=clip_group,
-            clip_sub_group=ClipSubGroup(sub_season=sub_season, scope=scope),
-        ):
-            clips = batch
-            if normalize_audio:
-                clips = await _normalize_clip_batch(clips=clips, settings=settings)
-            await _send_stored_clip_batch(bot=bot, chat_id=chat_id, clips=clips)
+        await _send_fetched_clip_batches(
+            bot=bot,
+            chat_id=chat_id,
+            clip_batches=services.clip_store.fetch(
+                clip_group=clip_group,
+                clip_sub_group=ClipSubGroup(sub_season=sub_season, scope=scope),
+            ),
+            settings=settings,
+            normalize_audio=normalize_audio,
+        )
 
     await bot.send_message(chat_id=chat_id, text='Done')
+
+
+async def _send_fetched_clip_batches(
+    *,
+    bot: Bot,
+    chat_id: ChatId,
+    clip_batches: AsyncIterator[list[Clip]],
+    settings: Settings,
+    normalize_audio: bool,
+) -> None:
+    async for batch in clip_batches:
+        clips = batch
+        if normalize_audio:
+            clips = await _normalize_clip_batch(clips=clips, settings=settings)
+        await _send_stored_clip_batch(bot=bot, chat_id=chat_id, clips=clips)
 
 
 async def _send_stored_clip_batch(
@@ -793,3 +810,8 @@ def _flow_for_mode(mode: object) -> FlowMenuDefinition | None:
 
 def _normalizes_audio(flow: FlowMenuDefinition) -> bool:
     return flow is _GET_FLOW
+
+
+def should_normalize_audio(*, settings: Settings) -> bool:
+    """Return whether audio normalization should be applied when sending clips."""
+    return _normalizes_audio(_GET_FLOW)

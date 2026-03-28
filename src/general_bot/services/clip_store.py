@@ -262,10 +262,22 @@ class Manifest:
 
 @dataclass(frozen=True, slots=True)
 class StoreResult:
-    """Result summary for a `store()` call."""
+    """Result summary for a `store()` call.
+
+    `clip_ids` contains only the ids of clips stored within a single
+    `store()` call for the specific `(clip_group, clip_sub_group)` used by
+    that call. These ids are subgroup-local identifiers and must not be
+    interpreted outside that subgroup.
+
+    Concatenating results via `__add__` preserves per-call ordering, but is
+    semantically meaningful only when combining results from the same clip
+    subgroup. The concatenated ids must not be treated as a globally
+    meaningful ordered sequence across independent store calls.
+    """
 
     stored_count: int
     duplicate_count: int
+    clip_ids: tuple[str, ...] = ()
 
     def __add__(self, other: Self) -> Self:
         if not isinstance(other, type(self)):
@@ -273,6 +285,7 @@ class StoreResult:
         return type(self)(
             stored_count=self.stored_count + other.stored_count,
             duplicate_count=self.duplicate_count + other.duplicate_count,
+            clip_ids=self.clip_ids + other.clip_ids,
         )
 
 
@@ -306,6 +319,22 @@ class UnknownClipsError(ValueError):
     def __init__(self, *, clip_ids: Sequence[str]) -> None:
         self.clip_ids = tuple(clip_ids)
         super().__init__(f'Clip ids are not present in manifest: {list(self.clip_ids)}')
+
+
+class DuplicateClipIdsError(ValueError):
+    """Raised when `fetch()` receives duplicate clip ids."""
+
+    def __init__(self, *, clip_ids: Sequence[str]) -> None:
+        self.clip_ids = tuple(clip_ids)
+        super().__init__(f'Clip ids contain duplicates: {list(self.clip_ids)}')
+
+
+class ClipIdsNotInSubGroupError(ValueError):
+    """Raised when `fetch()` receives clip ids outside the requested subgroup."""
+
+    def __init__(self, *, clip_ids: Sequence[str]) -> None:
+        self.clip_ids = tuple(clip_ids)
+        super().__init__(f'Clip ids are not present in requested sub-group: {list(self.clip_ids)}')
 
 
 class ManifestCorruptedError(RuntimeError):
@@ -485,6 +514,7 @@ class ClipStore:
         return StoreResult(
             stored_count=len(new_entries),
             duplicate_count=duplicate_count,
+            clip_ids=tuple(entry.id for entry, _ in new_entries),
         )
 
     async def compact(
@@ -781,16 +811,32 @@ class ClipStore:
         *,
         clip_group: ClipGroup,
         clip_sub_group: ClipSubGroup,
+        clip_ids: Sequence[str] | None = None,
     ) -> AsyncIterator[list[Clip]]:
         """Fetch clips for a clip sub-group in preserved batch order.
 
         The iterator yields one list per stored batch. Batches are ordered by
         increasing `batch`, and clips inside each batch are ordered by
-        increasing `order`.
+        increasing `order`. When `clip_ids` is provided, validation and
+        resolution are strictly local to the provided `(clip_group,
+        clip_sub_group)`. No cross-group or cross-subgroup lookup is
+        performed. Unknown ids are ids not present in the manifest of the
+        provided `clip_group`.
+
+        Validation precedence for `clip_ids` is:
+        1. Duplicate ids.
+        2. Ids missing from the clip-group manifest.
+        3. Ids not present in the requested subgroup.
+
+        Filtered results preserve the subgroup's canonical current manifest
+        order.
 
         Raises:
             ClipGroupNotFoundError: If the requested logical clip group has no matching clips.
+            DuplicateClipIdsError: If `clip_ids` contains duplicates.
             ManifestCorruptedError: If the clip-group manifest exists but is malformed.
+            UnknownClipsError: If `clip_ids` contains ids missing from the provided clip-group manifest.
+            ClipIdsNotInSubGroupError: If `clip_ids` contains ids outside the requested subgroup.
         """
         clip_group_prefix = self._clip_group_prefix(
             year=clip_group.year,
@@ -809,14 +855,33 @@ class ClipStore:
             ) from error
 
         matching_entries = self._sorted_sub_group_entries(manifest, clip_sub_group)
-        if not matching_entries:
-            raise ClipGroupNotFoundError(
-                year=clip_group.year,
-                season=clip_group.season,
-                universe=clip_group.universe,
-                sub_season=clip_sub_group.sub_season,
-                scope=clip_sub_group.scope,
-            )
+        if clip_ids is None:
+            if not matching_entries:
+                raise ClipGroupNotFoundError(
+                    year=clip_group.year,
+                    season=clip_group.season,
+                    universe=clip_group.universe,
+                    sub_season=clip_sub_group.sub_season,
+                    scope=clip_sub_group.scope,
+                )
+        else:
+            if len(set(clip_ids)) != len(clip_ids):
+                raise DuplicateClipIdsError(clip_ids=clip_ids)
+
+            manifest_ids = {entry.id for entry in manifest}
+            unknown_ids = [clip_id for clip_id in clip_ids if clip_id not in manifest_ids]
+            if unknown_ids:
+                raise UnknownClipsError(clip_ids=unknown_ids)
+
+            matching_ids = {entry.id for entry in matching_entries}
+            non_matching_ids = [clip_id for clip_id in clip_ids if clip_id not in matching_ids]
+            if non_matching_ids:
+                raise ClipIdsNotInSubGroupError(clip_ids=non_matching_ids)
+
+            requested_ids = set(clip_ids)
+            # Output always follows current manifest ordering after any
+            # compaction; input `clip_ids` order does not affect it.
+            matching_entries = [entry for entry in matching_entries if entry.id in requested_ids]
 
         # `groupby()` only forms correct batch groups because entries are
         # sorted by `(batch, order)` immediately above.
